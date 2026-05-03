@@ -31,7 +31,9 @@ const {
   buildDiatonicChords,
   buildProgressionSuggestions,
   buildScaleFromMode,
+  canNameChord,
   getChordDisplayNotes,
+  inferChordSymbol,
   normalizeChordSymbol,
   parseChordSymbol,
   spellNoteForKey
@@ -157,4 +159,162 @@ test("spells progression suggestions in the selected key", () => {
   })
 
   assert.ok([...suggestions.simple, ...suggestions.complex].every(symbol => !symbol.includes("#")))
+})
+
+test("infers major and minor triads correctly", () => {
+  assert.equal(inferChordSymbol(["C", "E", "G"]), "C")
+  assert.equal(inferChordSymbol(["C", "Eb", "G"]), "Cm")
+  assert.equal(inferChordSymbol(["D", "F#", "A"]), "D")
+  assert.equal(inferChordSymbol(["D", "F", "A"]), "Dm")
+})
+
+test("infers seventh chords correctly", () => {
+  assert.equal(inferChordSymbol(["C", "E", "G", "Bb"]), "C7")
+  assert.equal(inferChordSymbol(["C", "E", "G", "B"]), "Cmaj7")
+  assert.equal(inferChordSymbol(["C", "Eb", "G", "Bb"]), "Cm7")
+  assert.equal(inferChordSymbol(["C", "Eb", "Gb", "Bb"]), "Cm7b5")
+})
+
+test("infers extended chords correctly", () => {
+  assert.equal(inferChordSymbol(["C", "E", "G", "A"]), "C6")
+  assert.equal(inferChordSymbol(["C", "Eb", "G", "A"]), "Cm6")
+  assert.equal(inferChordSymbol(["C", "E", "G", "D"]), "Cadd9")
+  assert.equal(inferChordSymbol(["C", "Eb", "G", "D"]), "Cmadd9")
+})
+
+test("infers ninth and 6add9 chords correctly", () => {
+  assert.equal(inferChordSymbol(["C", "E", "G", "B", "D"]), "Cmaj9")
+  assert.equal(inferChordSymbol(["C", "E", "G", "Bb", "D"]), "C9")
+  assert.equal(inferChordSymbol(["C", "Eb", "G", "Bb", "D"]), "Cm9")
+  assert.equal(inferChordSymbol(["C", "E", "G", "A", "D"]), "C6add9")
+  assert.equal(canNameChord(["C", "E", "G", "B", "D"]), true)
+  assert.equal(canNameChord(["C", "Eb", "G", "Bb", "D"]), true)
+})
+
+test("infers suspended chords correctly", () => {
+  assert.equal(inferChordSymbol(["C", "F", "G"]), "Csus4")
+  assert.equal(inferChordSymbol(["C", "D", "G"]), "Csus2")
+  assert.equal(inferChordSymbol(["C", "D", "G", "Bb"]), "C7sus2")
+  assert.equal(inferChordSymbol(["C", "F", "G", "Bb"]), "C7sus4")
+})
+
+test("infers diminished and augmented chords correctly", () => {
+  assert.equal(inferChordSymbol(["C", "Eb", "Gb"]), "Cdim")
+  // Note: Bbb is enharmonically A, which forms a root relationship, so use A instead
+  assert.equal(inferChordSymbol(["C", "Eb", "Gb", "A"]), "Cdim7")
+  assert.equal(inferChordSymbol(["C", "E", "G#"]), "Caug")
+})
+
+test("handles two-note chords correctly", () => {
+  assert.equal(inferChordSymbol(["C", "E"]), "C")
+  assert.equal(inferChordSymbol(["C", "Eb"]), "Cm")
+  assert.equal(inferChordSymbol(["C", "B"]), "Cmaj7")
+  assert.equal(inferChordSymbol(["C", "Bb"]), "C7")
+  assert.equal(inferChordSymbol(["C", "A"]), "C6")
+})
+
+test("handles single notes as major chords", () => {
+  assert.equal(inferChordSymbol(["C"]), "C")
+  assert.equal(inferChordSymbol(["D"]), "D")
+})
+
+test("handles octave doublings (duplicate pitches)", () => {
+  assert.equal(inferChordSymbol(["C", "E", "G", "C"]), "C")
+  assert.equal(inferChordSymbol(["C", "Eb", "G", "Eb"]), "Cm")
+})
+
+test("canNameChord validates chord-namability correctly", () => {
+  // Valid chords should return true
+  assert.equal(canNameChord(["C", "E", "G"]), true)
+  assert.equal(canNameChord(["C", "Eb", "G"]), true)
+  assert.equal(canNameChord(["C", "E", "G", "Bb"]), true)
+  
+  // Edge cases - any valid chord should be namable
+  assert.equal(canNameChord(["C"]), true)
+  assert.equal(canNameChord(["C", "E"]), true)
+})
+
+test("handles power chords and various voicings", () => {
+  assert.equal(inferChordSymbol(["C", "G"]), "C")
+  assert.equal(inferChordSymbol(["D", "A"]), "D")
+  // C, G, D is C sus2 (root, 5th, 2nd)
+  assert.equal(inferChordSymbol(["C", "G", "D"]), "Csus2")
+})
+
+test("does not name triads with unrelated extra tones as plain triads", () => {
+  assert.equal(inferChordSymbol(["E", "G", "B", "D"]), "Em7")
+  assert.equal(inferChordSymbol(["E", "G", "B", "C#"]), "Em6")
+  assert.equal(inferChordSymbol(["E", "G", "B", "F#"]), "Emadd9")
+  assert.equal(inferChordSymbol(["E", "G", "B", "A"]), "A7sus2")
+  assert.equal(inferChordSymbol(["E", "G", "B", "A#"]), null)
+  assert.equal(inferChordSymbol(["E", "G", "B", "F"]), null)
+  assert.equal(canNameChord(["E", "G", "B", "A#"]), false)
+})
+
+function voicingGapCount(voicing) {
+  const strings = voicing.map(entry => entry.string).sort((a, b) => a - b)
+  let gapCount = 0
+
+  for(let i = 1; i < strings.length; i++) {
+    gapCount += Math.max(0, strings[i] - strings[i - 1] - 1)
+  }
+
+  return gapCount
+}
+
+function voicingMaxGap(voicing) {
+  const strings = voicing.map(entry => entry.string).sort((a, b) => a - b)
+  let maxGap = 0
+
+  for(let i = 1; i < strings.length; i++) {
+    maxGap = Math.max(maxGap, strings[i] - strings[i - 1] - 1)
+  }
+
+  return maxGap
+}
+
+test("gap-aware voicing suggestions keep the requested sounding note count", () => {
+  for(const symbol of ["Dadd9", "Fmaj9", "Cmaj7", "G7", "Bdim", "G7b5/C"]) {
+    for(const stringCount of [3, 4, 5, 6]) {
+      const analysis = analyzeChord({ symbol, stringCount, key: "C", mode: "Ionian" })
+      assert.ok(analysis.voicings.length > 0, `${symbol} should produce ${stringCount}-note voicings`)
+      assert.ok(
+        analysis.voicings.every(voicing => voicing.length === stringCount),
+        `${symbol} ${stringCount}-note voicings should contain exactly ${stringCount} sounding notes`
+      )
+    }
+  }
+})
+
+test("gap-aware voicing suggestions keep skipped strings rare and practical", () => {
+  for(const symbol of ["Dadd9", "Fmaj9", "Cmaj7", "G7", "Bdim", "G7b5/C"]) {
+    const analysis = analyzeChord({ symbol, stringCount: 4, key: "C", mode: "Ionian" })
+    const gapVoicings = analysis.voicings.filter(voicing => voicingGapCount(voicing) > 0)
+
+    assert.ok(
+      gapVoicings.length <= Math.ceil(analysis.voicings.length * 0.35),
+      `${symbol} should not let skipped-string voicings dominate the suggestion list`
+    )
+    assert.ok(
+      gapVoicings.every(voicing => voicingGapCount(voicing) <= 2 && voicingMaxGap(voicing) <= 1),
+      `${symbol} skipped-string voicings should use only small intentional gaps`
+    )
+  }
+})
+
+test("gap-aware voicing suggestions use gaps for extensions rather than filler variety", () => {
+  const bdim = analyzeChord({ symbol: "Bdim", stringCount: 4, key: "C", mode: "Ionian" })
+  assert.equal(bdim.voicings.filter(voicing => voicingGapCount(voicing) > 0).length, 0)
+
+  const dadd9 = analyzeChord({ symbol: "Dadd9", stringCount: 4, key: "C", mode: "Ionian" })
+  assert.ok(
+    dadd9.voicings.some(voicing => voicingGapCount(voicing) > 0 && voicing.some(entry => entry.role === "9")),
+    "Dadd9 should allow a meaningful skipped-string voicing for the 9"
+  )
+
+  const fmaj9 = analyzeChord({ symbol: "Fmaj9", stringCount: 4, key: "C", mode: "Ionian" })
+  assert.ok(
+    fmaj9.voicings.some(voicing => voicingGapCount(voicing) > 0 && voicing.some(entry => entry.role === "9" || entry.role === "7")),
+    "Fmaj9 should allow a meaningful skipped-string voicing for upper color tones"
+  )
 })

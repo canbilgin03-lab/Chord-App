@@ -6,6 +6,14 @@ export type Quality =
   | "7"
   | "7b5"
   | "maj7"
+  | "6"
+  | "m6"
+  | "add9"
+  | "madd9"
+  | "6add9"
+  | "maj9"
+  | "m9"
+  | "9"
   | "m7"
   | "m7b5"
   | "dim"
@@ -19,6 +27,15 @@ export type Quality =
 type ChordShape = {
   notes: string[]
   roles: string[]
+}
+
+type VoicingGapMetadata = {
+  hasGap: boolean
+  gapCount: number
+  maxGapSize: number
+  isMeaningfulGap: boolean
+  extensionOnHigherString: boolean
+  fillableGapPenalty: number
 }
 
 type ParsedChord = {
@@ -149,6 +166,7 @@ const SCORE_CONFIG = {
       rootBassPreference: { tier: "preference" as const, weight: 10, scale: 1 },
       openPositionPreference: { tier: "preference" as const, weight: 10, scale: 1 },
       duplicateTonePenalty: { tier: "preference" as const, weight: 6, scale: 3 },
+      stringGapPenalty: { tier: "preference" as const, weight: 8, scale: 2 },
       stringGroupPreference: { tier: "preference" as const, weight: 8, scale: 12 }
     }
   }
@@ -284,6 +302,7 @@ function parseQualityTail(tail: string): Quality | null {
     minor: "m",
     "-": "m",
     "7": "7",
+    "6": "6",
     "7b5": "7b5",
     maj7: "maj7",
     ma7: "maj7",
@@ -306,7 +325,19 @@ function parseQualityTail(tail: string): Quality | null {
     "7sus2": "7sus2",
     "7sus4": "7sus4",
     aug: "aug",
-    "+": "aug"
+    "+": "aug",
+    add9: "add9",
+    add2: "add9",
+    "6add9": "6add9",
+    "6/9": "6add9",
+    "maj9": "maj9",
+    "m9": "m9",
+    "9": "9",
+    "dom9": "9",
+    "madd9": "madd9",
+    "madd2": "madd9",
+    m6: "m6",
+    "m6add9": "m6"
   }
 
   return aliases[clean] ?? null
@@ -389,6 +420,91 @@ export function normalizeChordSymbol(symbol: string) {
   return parsed.symbol
 }
 
+type ChordInferencePattern = {
+  type: Quality
+  intervals: number[]
+}
+
+const CHORD_INFERENCE_PATTERNS: ChordInferencePattern[] = [
+  { type: "6add9", intervals: [0, 2, 4, 7, 9] },
+  { type: "maj9", intervals: [0, 2, 4, 7, 11] },
+  { type: "m9", intervals: [0, 2, 3, 7, 10] },
+  { type: "9", intervals: [0, 2, 4, 7, 10] },
+  { type: "add9", intervals: [0, 2, 4, 7] },
+  { type: "madd9", intervals: [0, 2, 3, 7] },
+  { type: "maj7", intervals: [0, 4, 7, 11] },
+  { type: "m7", intervals: [0, 3, 7, 10] },
+  { type: "m7b5", intervals: [0, 3, 6, 10] },
+  { type: "7b5", intervals: [0, 4, 6, 10] },
+  { type: "7", intervals: [0, 4, 7, 10] },
+  { type: "dim7", intervals: [0, 3, 6, 9] },
+  { type: "6", intervals: [0, 4, 7, 9] },
+  { type: "m6", intervals: [0, 3, 7, 9] },
+  { type: "7sus2", intervals: [0, 2, 7, 10] },
+  { type: "7sus4", intervals: [0, 5, 7, 10] },
+  { type: "dim", intervals: [0, 3, 6] },
+  { type: "aug", intervals: [0, 4, 8] },
+  { type: "sus2", intervals: [0, 2, 7] },
+  { type: "sus4", intervals: [0, 5, 7] },
+  { type: "m", intervals: [0, 3, 7] },
+  { type: "maj", intervals: [0, 4, 7] }
+]
+
+const TWO_NOTE_INFERENCE_PATTERNS: ChordInferencePattern[] = [
+  { type: "maj", intervals: [0, 4] },
+  { type: "m", intervals: [0, 3] },
+  { type: "maj", intervals: [0, 7] },
+  { type: "sus4", intervals: [0, 5] },
+  { type: "sus2", intervals: [0, 2] },
+  { type: "6", intervals: [0, 9] },
+  { type: "maj7", intervals: [0, 11] },
+  { type: "7", intervals: [0, 10] }
+]
+
+function intervalSetMatches(intervals: Set<number>, expected: number[]) {
+  return intervals.size === expected.length && expected.every(interval => intervals.has(interval))
+}
+
+export function inferChordSymbol(notes: string[], key = "C", mode = "Ionian") {
+  if(!Array.isArray(notes)) return null
+
+  const pitchSet = new Set(notes.map(normalize))
+  const uniquePitches = [...pitchSet]
+  if (uniquePitches.length === 0) return null
+
+  for (const root of uniquePitches) {
+    const intervals = new Set<number>(
+      uniquePitches.map(note => (idx(note) - idx(root) + 12) % 12)
+    )
+
+    if (!intervals.has(0)) continue
+
+    if (intervals.size === 1) {
+      return symbolForQuality(root, "maj", undefined, key, mode)
+    }
+
+    if (uniquePitches.length === 2) {
+      const match = TWO_NOTE_INFERENCE_PATTERNS.find(pattern => intervalSetMatches(intervals, pattern.intervals))
+      if(match) return symbolForQuality(root, match.type, undefined, key, mode)
+      continue
+    }
+
+    const match = CHORD_INFERENCE_PATTERNS.find(pattern => intervalSetMatches(intervals, pattern.intervals))
+    if(match) return symbolForQuality(root, match.type, undefined, key, mode)
+  }
+
+  return null
+}
+
+/**
+ * Validates whether a set of notes can be named as a valid chord.
+ * Returns true if the notes can form a recognizable chord, false otherwise.
+ * This is used to validate whether moving a note to a fret position results in a namable chord.
+ */
+export function canNameChord(notes: string[], key = "C", mode = "Ionian"): boolean {
+  return inferChordSymbol(notes, key, mode) !== null
+}
+
 export function getChordRoot(symbol: string) {
   return parseChordSymbol(symbol)?.root ?? null
 }
@@ -412,6 +528,7 @@ function buildChord(root: string, type: Quality): ChordShape {
   if (type==="7") return { notes:[root,add(root,4),add(root,7),add(root,10)], roles:["1","3","5","b7"] }
   if (type==="7b5") return { notes:[root,add(root,4),add(root,6),add(root,10)], roles:["1","3","b5","b7"] }
   if (type==="maj7") return { notes:[root,add(root,4),add(root,7),add(root,11)], roles:["1","3","5","7"] }
+  if (type==="6") return { notes:[root,add(root,4),add(root,7),add(root,9)], roles:["1","3","5","6"] }
 
   if (type==="m7") return { notes:[root,add(root,3),add(root,7),add(root,10)], roles:["1","b3","5","b7"] }
 
@@ -423,6 +540,13 @@ function buildChord(root: string, type: Quality): ChordShape {
   if (type==="7sus2") return { notes:[root,add(root,2),add(root,7),add(root,10)], roles:["1","2","5","b7"] }
   if (type==="7sus4") return { notes:[root,add(root,5),add(root,7),add(root,10)], roles:["1","4","5","b7"] }
   if (type==="aug") return { notes:[root,add(root,4),add(root,8)], roles:["1","3","#5"] }
+  if (type==="m6") return { notes:[root,add(root,3),add(root,7),add(root,9)], roles:["1","b3","5","6"] }
+  if (type==="add9") return { notes:[root,add(root,4),add(root,7),add(root,2)], roles:["1","3","5","9"] }
+  if (type==="madd9") return { notes:[root,add(root,3),add(root,7),add(root,2)], roles:["1","b3","5","9"] }
+  if (type==="6add9") return { notes:[root,add(root,4),add(root,7),add(root,9),add(root,2)], roles:["1","3","5","6","9"] }
+  if (type==="maj9") return { notes:[root,add(root,4),add(root,7),add(root,11),add(root,2)], roles:["1","3","5","7","9"] }
+  if (type==="m9") return { notes:[root,add(root,3),add(root,7),add(root,10),add(root,2)], roles:["1","b3","5","b7","9"] }
+  if (type==="9") return { notes:[root,add(root,4),add(root,7),add(root,10),add(root,2)], roles:["1","3","5","b7","9"] }
 
   return { notes:[root], roles:["1"] }
 }
@@ -485,14 +609,43 @@ export function getChordDisplayNotes(symbol: string, key?: string, mode = "Ionia
     : displayTones
 }
 
+function combinations<T>(items:T[], length:number) {
+  const result:T[][] = []
+
+  function build(start:number, chosen:T[]) {
+    if(chosen.length === length) {
+      result.push(chosen)
+      return
+    }
+
+    for(let i = start; i < items.length; i++) {
+      build(i + 1, [...chosen, items[i]])
+    }
+  }
+
+  build(0, [])
+  return result
+}
+
 function groups(size:number){
-  const all = [
-    [0,1,2],[1,2,3],[2,3,4],[3,4,5],
-    [0,1,2,3],[1,2,3,4],[2,3,4,5],
-    [0,1,2,3,4],[1,2,3,4,5],
-    [0,1,2,3,4,5]
-  ]
-  return all.filter(g=>g.length===size)
+  const strings = [0,1,2,3,4,5]
+  const maxSpan = Math.min(6, size + 2)
+  const groupSets: number[][] = []
+
+  for(let length = size; length <= maxSpan; length++) {
+    groupSets.push(...combinations(strings, length))
+  }
+
+  return groupSets.sort((a,b) => {
+    if(a.length !== b.length) return a.length - b.length
+    const aMax = Math.max(...a)
+    const bMax = Math.max(...b)
+    if(aMax !== bMax) return bMax - aMax
+    const aAvg = a.reduce((sum, n) => sum + n, 0) / a.length
+    const bAvg = b.reduce((sum, n) => sum + n, 0) / b.length
+    if(aAvg !== bAvg) return bAvg - aAvg
+    return Math.min(...b) - Math.min(...a)
+  })
 }
 
 function containsThird(v:CandidateEntry[]){
@@ -600,6 +753,100 @@ function hasSplitPositionCluster(v: CandidateEntry[]) {
   return behindCount >= 1
 }
 
+function stringGapPenalty(v: CandidateEntry[]) {
+  const strings = v.map(x => x.string).sort((a, b) => a - b)
+  let penalty = 0
+  for (let i = 1; i < strings.length; i++) {
+    const gap = strings[i] - strings[i - 1] - 1
+    if (gap > 0) penalty += gap
+  }
+  return penalty
+}
+
+function gapStrings(v: CandidateEntry[]) {
+  const strings = v.map(x => x.string).sort((a, b) => a - b)
+  const gaps: number[] = []
+
+  for(let i = 1; i < strings.length; i++) {
+    for(let string = strings[i - 1] + 1; string < strings[i]; string++) {
+      gaps.push(string)
+    }
+  }
+
+  return gaps
+}
+
+function maxStringGap(v: CandidateEntry[]) {
+  const strings = v.map(x => x.string).sort((a, b) => a - b)
+  let maxGap = 0
+
+  for(let i = 1; i < strings.length; i++) {
+    maxGap = Math.max(maxGap, strings[i] - strings[i - 1] - 1)
+  }
+
+  return maxGap
+}
+
+function isColorRole(role: string) {
+  return role === "2" ||
+    role === "4" ||
+    role === "6" ||
+    role === "7" ||
+    role === "b7" ||
+    role === "bb7" ||
+    role === "9"
+}
+
+function fillableGapPenalty(v: CandidateEntry[], chord: ChordShape) {
+  const gaps = gapStrings(v)
+  if(gaps.length === 0) return 0
+
+  const frets = v.map(entry => entry.fret)
+  const minFret = Math.min(...frets)
+  const maxFret = Math.max(...frets)
+  const usedRoles = new Set(v.map(entry => entry.role))
+  let penalty = 0
+
+  for(const stringIndex of gaps) {
+    for(let fret = minFret; fret <= maxFret; fret++) {
+      const note = fretNote(TUNING[stringIndex], fret)
+      const roleIndex = chord.notes.indexOf(note)
+      if(roleIndex < 0) continue
+
+      const role = chord.roles[roleIndex]
+      penalty += usedRoles.has(role) ? 0.35 : 1
+    }
+  }
+
+  return penalty
+}
+
+function voicingGapMetadata(v: CandidateEntry[], chord: ChordShape): VoicingGapMetadata {
+  const gapCount = stringGapPenalty(v)
+  const maxGapSize = maxStringGap(v)
+  const hasGap = gapCount > 0
+  const sorted = v.slice().sort((a, b) => a.string - b.string)
+  const gapStart = gapStrings(v)[0] ?? Number.POSITIVE_INFINITY
+  const extensionOnHigherString = sorted.some(entry => {
+    return entry.string > gapStart && entry.string >= 3 && isColorRole(entry.role)
+  })
+  const fillablePenalty = fillableGapPenalty(v, chord)
+  const hasMeaningfulTone = extensionOnHigherString
+
+  return {
+    hasGap,
+    gapCount,
+    maxGapSize,
+    isMeaningfulGap: hasGap &&
+      gapCount <= 2 &&
+      maxGapSize <= 1 &&
+      fillablePenalty < 1 &&
+      hasMeaningfulTone,
+    extensionOnHigherString,
+    fillableGapPenalty: fillablePenalty
+  }
+}
+
 function stringGroupPreferenceScore(v: CandidateEntry[], stringCount:number){
   const strings = v.map(x=>x.string)
   const avg = strings.reduce((a,b)=>a+b,0)/strings.length
@@ -621,7 +868,14 @@ function stringGroupPreferenceScore(v: CandidateEntry[], stringCount:number){
   return score
 }
 
-function scoreVoicingBreakdown(v:CandidateEntry[], stringCount:number, root:string, requiresThird = true, bass?: string){
+function scoreVoicingBreakdown(
+  v:CandidateEntry[],
+  stringCount:number,
+  root:string,
+  requiresThird = true,
+  bass?: string,
+  chord?: ChordShape
+){
   const config = SCORE_CONFIG.voicing
   const frets=v.map(x=>x.fret)
   const fretted = frets.filter(fret => fret > 0)
@@ -680,7 +934,13 @@ function scoreVoicingBreakdown(v:CandidateEntry[], stringCount:number, root:stri
     if (c > 1) duplicateCount += c - 1
   }
   add("duplicateTonePenalty", duplicateCount, "avoid excessive doubled tones")
-
+  const gapMetadata = chord ? voicingGapMetadata(v, chord) : null
+  const gapRaw = gapMetadata
+    ? gapMetadata.isMeaningfulGap
+      ? gapMetadata.gapCount * 0.45 + gapMetadata.fillableGapPenalty
+      : gapMetadata.gapCount + gapMetadata.fillableGapPenalty
+    : stringGapPenalty(v)
+  add("stringGapPenalty", gapRaw, "avoid gaps in string voicing")
   add("stringGroupPreference", stringGroupPreferenceScore(v, stringCount), "preferred string group")
 
   return breakdown
@@ -738,6 +998,32 @@ function remainingCanSupplyRole(options: CandidateEntry[][], startIndex: number,
   return false
 }
 
+function remainingCanSupplyBass(options: CandidateEntry[][], startIndex: number, bass: string) {
+  for(let i = startIndex; i < options.length; i++) {
+    if(options[i].some(entry => entry.note === bass)) return true
+  }
+
+  return false
+}
+
+function hasAllowedStringGaps(curr: CandidateEntry[]) {
+  if(curr.length < 2) return true
+  const sorted = curr.slice().sort((a, b) => a.string - b.string)
+  for(let i = 1; i < sorted.length; i++) {
+    if(sorted[i].string - sorted[i - 1].string > 2) return false
+  }
+  return true
+}
+
+function sortStringOptions(options: CandidateEntry[], definingRoles: Set<string>, bass?: string) {
+  return [...options].sort((a, b) => {
+    const aPriority = a.note === bass ? 0 : definingRoles.has(a.role) ? 1 : 2
+    const bPriority = b.note === bass ? 0 : definingRoles.has(b.role) ? 1 : 2
+    if(aPriority !== bPriority) return aPriority - bPriority
+    return a.fret - b.fret
+  })
+}
+
 function isPartialStretchPlayable(curr: CandidateEntry[]) {
   if(curr.length < 2) return true
   const frets = curr.map(entry => entry.fret)
@@ -746,32 +1032,49 @@ function isPartialStretchPlayable(curr: CandidateEntry[]) {
   return max - min <= maxStretchForPosition(min)
 }
 
-function generateForWindow(chord: ChordShape, group: number[], anchor: number, bass?: string) {
+function generateForWindow(chord: ChordShape, group: number[], anchor: number, targetSize: number, bass?: string) {
   const definingRoles = definingRolesForChord(chord)
   const options = group.map(stringIndex => stringOptionsForWindow(chord, stringIndex, anchor))
   const result: CandidateEntry[][] = []
 
-  if(options.some(items => items.length === 0)) return result
+  const playableStrings = options.filter(items => items.length > 0).length
+  if(playableStrings < targetSize) return result
+
+  const orderedOptions = options
+    .map(items => sortStringOptions(items, definingRoles, bass))
+    .reverse()
 
   function build(index: number, curr: CandidateEntry[]) {
     const hasDefiningRole = containsAnyRole(curr, definingRoles)
+    const hasBassNote = !!bass && curr.some(entry => entry.note === bass)
+    const remainingStrings = orderedOptions.length - index
+    const remainingNeeded = targetSize - curr.length
 
-    if(!hasDefiningRole && !remainingCanSupplyRole(options, index, definingRoles)) {
-      return
-    }
+    if(remainingNeeded < 0 || remainingNeeded > remainingStrings) return
+    if(!hasDefiningRole && !remainingCanSupplyRole(orderedOptions, index, definingRoles)) return
+    if(bass && !hasBassNote && !remainingCanSupplyBass(orderedOptions, index, bass)) return
 
-    if(index === options.length) {
-      if(containsDefiningTone(curr, chord) && isPlayableStretch(curr) && !(group.length >= 5 && hasSplitPositionCluster(curr))) {
-        result.push(curr)
+    if(index === orderedOptions.length) {
+      if(
+        curr.length === targetSize &&
+        containsDefiningTone(curr, chord) &&
+        isPlayableStretch(curr) &&
+        !(group.length >= 5 && hasSplitPositionCluster(curr)) &&
+        (!bass || lowestPlayedString(curr).note === bass)
+      ) {
+        result.push(curr.slice().sort((a, b) => a.string - b.string))
       }
       return
     }
 
-    for(const option of options[index]) {
-      if(index === 0 && bass && option.note !== bass) continue
+    if(remainingStrings > remainingNeeded) {
+      build(index + 1, curr)
+    }
 
+    for(const option of orderedOptions[index]) {
       const next = [...curr, option]
       if(!isPartialStretchPlayable(next)) continue
+      if(!hasAllowedStringGaps(next)) continue
       if(group.length >= 5 && next.length >= 4 && hasSplitPositionCluster(next)) continue
 
       build(index + 1, next)
@@ -797,7 +1100,7 @@ function generate(chord:ChordShape,size:number,bass?: string){
       })
 
     for(const anchor of preferredAnchors) {
-      generated.push(...generateForWindow(chord, group, anchor, bass))
+      generated.push(...generateForWindow(chord, group, anchor, size, bass))
     }
   }
 
@@ -1012,6 +1315,14 @@ const QUALITY_SUFFIX: Record<Quality, string> = {
   dim7: "dim7",
   sus2: "sus2",
   sus4: "sus4",
+  "6": "6",
+  m6: "m6",
+  add9: "add9",
+  madd9: "madd9",
+  "6add9": "6add9",
+  maj9: "maj9",
+  m9: "m9",
+  "9": "9",
   "7sus2": "7sus2",
   "7sus4": "7sus4",
   aug: "aug"
@@ -2124,6 +2435,7 @@ function getDegree(symbol: string, key: string) {
 
 function voicingLimitForStringCount(stringCount: number) {
   if (stringCount === 3) return 8
+  if (stringCount === 4) return 8
   if (stringCount === 5 || stringCount === 6) return 4
   return 6
 }
@@ -2153,6 +2465,90 @@ function mergeCanonicalVoicings(generic: CandidateEntry[][], canonical: Candidat
   ]).slice(0, limit)
 }
 
+type ScoredVoicingCandidate = {
+  v: CandidateEntry[]
+  pos: ReturnType<typeof positionMetric>
+  score: number
+  breakdown: ScoreBreakdown
+  gap: VoicingGapMetadata
+}
+
+function selectableVoicingCandidates(scored: ScoredVoicingCandidate[]) {
+  const preferred = scored.filter(candidate => {
+    return !candidate.gap.hasGap || candidate.gap.isMeaningfulGap
+  })
+
+  return preferred.length > 0 ? preferred : scored
+}
+
+function pickVisibleVoicings(scored: ScoredVoicingCandidate[], stringCount: number, limit: number) {
+  const selectable = selectableVoicingCandidates(scored)
+  const zones = new Map<number, typeof selectable>()
+
+  for(const item of selectable){
+    const z=getZone(item.pos.min)
+    if(!zones.has(z)) zones.set(z,[])
+    zones.get(z)!.push(item)
+  }
+
+  for(const arr of zones.values()){
+    arr.sort((a,b)=>a.score-b.score)
+  }
+
+  const result:CandidateEntry[][] = []
+  const addCandidate = (candidate: ScoredVoicingCandidate | undefined) => {
+    if(!candidate) return false
+    result.push(candidate.v)
+    return true
+  }
+
+  addCandidate(selectable[0])
+
+  const secondPool = (zones.get(0)||[]).concat(zones.get(1)||[])
+  for(const item of secondPool){
+    if(result.length>=2) break
+    addCandidate(item)
+  }
+
+  const zoneOrder = [1,2,3,4]
+  const zonePointers: Record<number, number> = {1:0,2:0,3:0,4:0}
+
+  while(result.length < limit){
+    let added = false
+
+    for(const z of zoneOrder){
+      const arr = zones.get(z) || []
+      let i = zonePointers[z]
+
+      while(i < arr.length){
+        const candidate = arr[i]
+        zonePointers[z] = i + 1
+        i++
+
+        if(stringCount < 5 && hasOpen(candidate.v)) continue
+        if(stringCount >= 5 && hasSplitPositionCluster(candidate.v)) continue
+
+        addCandidate(candidate)
+        added = true
+        break
+      }
+
+      if(result.length >= limit) break
+    }
+
+    if(!added) break
+  }
+
+  if(result.length < limit) {
+    for(const candidate of selectable) {
+      if(result.length >= limit) break
+      addCandidate(candidate)
+    }
+  }
+
+  return dedupe(result).slice(0, limit)
+}
+
 export function analyzeChord({
   symbol,
   stringCount=4,
@@ -2171,12 +2567,13 @@ export function analyzeChord({
   const raw=generate(chord,stringCount, parsed.bass)
 
   const scored=raw.map(v=>{
-    const breakdown = scoreVoicingBreakdown(v, stringCount, parsed.root, chordRequiresThird(chord), parsed.bass)
+    const breakdown = scoreVoicingBreakdown(v, stringCount, parsed.root, chordRequiresThird(chord), parsed.bass, chord)
     return {
       v,
       pos:positionMetric(v),
       score:breakdown.total,
-      breakdown
+      breakdown,
+      gap: voicingGapMetadata(v, chord)
     }
   })
   .sort((a,b)=>{
@@ -2188,58 +2585,8 @@ export function analyzeChord({
     return a.score-b.score
   })
 
-  const zones = new Map<number, typeof scored>()
-
-  for(const item of scored){
-    const z=getZone(item.pos.min)
-    if(!zones.has(z)) zones.set(z,[])
-    zones.get(z)!.push(item)
-  }
-
-  for(const arr of zones.values()){
-    arr.sort((a,b)=>a.score-b.score)
-  }
-
-  const result:CandidateEntry[][] = []
-
-  if(scored.length) result.push(scored[0].v)
-
-  const secondPool = (zones.get(0)||[]).concat(zones.get(1)||[])
-  for(const item of secondPool){
-    if(result.length>=2) break
-    result.push(item.v)
-  }
-
-  const zoneOrder = [1,2,3,4]
-  const zonePointers: Record<number, number> = {1:0,2:0,3:0,4:0}
-
   const voicingLimit = voicingLimitForStringCount(stringCount)
-
-  while(result.length < voicingLimit){
-    let added = false
-
-    for(const z of zoneOrder){
-      const arr = zones.get(z) || []
-      let i = zonePointers[z]
-
-      while(i < arr.length){
-        const candidate = arr[i]
-        zonePointers[z] = i + 1
-        i++
-
-        if(stringCount < 5 && hasOpen(candidate.v)) continue
-        if(stringCount >= 5 && hasSplitPositionCluster(candidate.v)) continue
-
-        result.push(candidate.v)
-        added = true
-        break
-      }
-
-      if(result.length >= voicingLimit) break
-    }
-
-    if(!added) break
-  }
+  const result = pickVisibleVoicings(scored, stringCount, voicingLimit)
 
   const voicings = mergeCanonicalVoicings(
     dedupe(result),
@@ -2251,7 +2598,7 @@ export function analyzeChord({
   return {
     chord_name:symbol,
     voicings,
-    voicing_scores: voicings.map(voicing => scoreVoicingBreakdown(voicing, stringCount, parsed.root, chordRequiresThird(chord), parsed.bass)),
+    voicing_scores: voicings.map(voicing => scoreVoicingBreakdown(voicing, stringCount, parsed.root, chordRequiresThird(chord), parsed.bass, chord)),
     suggestions:getModeAwareSuggestions(symbol,key,mode),
     key_context:key,
     scale_notes:buildScaleFromMode(key, mode),

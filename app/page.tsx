@@ -1,15 +1,17 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import {
   analyzeChord,
   buildDiatonicChords,
   buildProgressionSuggestions,
   buildScaleFromMode,
+  canNameChord,
   getChordRoot,
   getChordDisplayNotes,
   getFretNote,
   getNoteIndex,
+  inferChordSymbol,
   normalizeNote,
   normalizeChordSymbol,
   parseChordSymbol,
@@ -94,6 +96,8 @@ type ProgressionItem = {
   chord: string
   strings: number
   voicingIndex: number
+  customVoicing?: VoicingItem[]
+  customVoicingIndex?: number
 }
 
 type VoicingItem = {
@@ -150,6 +154,14 @@ function qualityDegreeSuffix(quality: Quality) {
     "7": "7",
     "7b5": "7\u266d5",
     maj7: "\u03947",
+    "6": "6",
+    m6: "m6",
+    add9: "add9",
+    madd9: "madd9",
+    "6add9": "6add9",
+    maj9: "maj9",
+    m9: "m9",
+    "9": "9",
     m7: "7",
     m7b5: "\u00f87",
     dim: "\u00b0",
@@ -320,6 +332,8 @@ export default function Home() {
 
   const [voicings, setVoicings] = useState<VoicingItem[][]>([])
   const [voicingIndex, setVoicingIndex] = useState(0)
+  const [draggedNote, setDraggedNote] = useState<VoicingItem | null>(null)
+  const [draggedMutedString, setDraggedMutedString] = useState<number | null>(null)
 
   const [inputChord, setInputChord] = useState("")
   const [inputStrings, setInputStrings] = useState(4)
@@ -346,6 +360,44 @@ export default function Home() {
   const progressionPlayingRef = useRef(false)
   const progressionLoopingRef = useRef(true)
 
+  function sortVoicingByString(voicing: VoicingItem[]) {
+    return [...voicing].sort((a, b) => a.string - b.string)
+  }
+
+  function voicingPositionKey(voicing: VoicingItem[]) {
+    return JSON.stringify(sortVoicingByString(voicing).map(entry => [entry.string, entry.fret]))
+  }
+
+  function getPinnedCustomVoicing(item: ProgressionItem | null | undefined) {
+    if(!item?.customVoicing || item.customVoicing.length !== item.strings) return undefined
+    return item.customVoicing
+  }
+
+  function roleMapForChord(chord: string) {
+    const roles = new Map<string, string>()
+
+    for(const tone of getChordDisplayNotes(chord)) {
+      const note = normalizeNote(tone.note)
+      if(!roles.has(note) || roles.get(note) === "8") {
+        roles.set(note, tone.role === "8" ? "1" : tone.role)
+      }
+    }
+
+    return roles
+  }
+
+  function applyChordRoles(voicing: VoicingItem[], chord: string) {
+    const roles = roleMapForChord(chord)
+    return sortVoicingByString(voicing).map(entry => ({
+      ...entry,
+      role: roles.get(normalizeNote(entry.note)) ?? entry.role
+    }))
+  }
+
+  function dragPreviewClass(preview: "allowed" | "forbidden", placement: "fret" | "string") {
+    return `drag-preview drag-preview-${placement} drag-preview-${preview}`
+  }
+
   function computeVoicings(item: ProgressionItem) {
     const res = analyzeChord({
       symbol: item.chord,
@@ -354,7 +406,22 @@ export default function Home() {
       mode
     })
 
-    const nextVoicings = (res.voicings || []) as VoicingItem[][]
+    let nextVoicings = (res.voicings || []) as VoicingItem[][]
+    const customVoicing = getPinnedCustomVoicing(item)
+
+    if (customVoicing) {
+      const customVoicingKey = voicingPositionKey(customVoicing)
+      nextVoicings = nextVoicings.filter(voicing =>
+        voicingPositionKey(voicing) !== customVoicingKey
+      )
+
+      const insertionIndex = Math.max(
+        0,
+        Math.min(item.customVoicingIndex ?? item.voicingIndex ?? 0, nextVoicings.length)
+      )
+      nextVoicings.splice(insertionIndex, 0, customVoicing)
+    }
+
     setVoicings(nextVoicings)
 
     const safeIndex = nextVoicings.length > 0
@@ -362,6 +429,235 @@ export default function Home() {
       : 0
 
     setVoicingIndex(safeIndex)
+  }
+
+  function getCurrentVoicing(item: ProgressionItem) {
+    return voicings[voicingIndex] ?? getPinnedCustomVoicing(item)
+  }
+
+  function inferChordFromVoicing(newVoicing: VoicingItem[]) {
+    return inferChordSymbol(newVoicing.map(entry => entry.note), key, mode)
+  }
+
+  function distinctChordToneCount(newVoicing: VoicingItem[]) {
+    return new Set(newVoicing.map(entry => normalizeNote(entry.note))).size
+  }
+
+  /**
+   * Validates that a voicing:
+   * 1. Has at least 3 note markers
+   * 2. Includes at least 3 distinct chord tones
+   * 3. Can be named as a valid chord
+   */
+  function canApplyVoicing(newVoicing: VoicingItem[]) {
+    if (newVoicing.length < 3) return false
+    if (distinctChordToneCount(newVoicing) < 3) return false
+    return canNameChord(newVoicing.map(entry => entry.note), key, mode)
+  }
+
+  function updateCustomVoicing(newVoicing: VoicingItem[]) {
+    if (selectedIndex === null) return
+    const inferredChord = inferChordFromVoicing(newVoicing)
+    if (!inferredChord) return
+
+    const normalizedVoicing = applyChordRoles(newVoicing, inferredChord)
+    const nextStringCount = normalizedVoicing.length
+    const next = [...progression]
+    const currentItem = next[selectedIndex]
+    const originalIndex = Math.max(0, currentItem.customVoicingIndex ?? currentItem.voicingIndex)
+
+    next[selectedIndex] = {
+      ...currentItem,
+      chord: inferredChord,
+      strings: nextStringCount,
+      customVoicing: normalizedVoicing,
+      customVoicingIndex: originalIndex,
+      voicingIndex: originalIndex
+    }
+
+    progressionRef.current = next
+    setProgression(next)
+    setInputChord(inferredChord)
+    setInputStrings(nextStringCount)
+    computeVoicings(next[selectedIndex])
+  }
+
+  function getFretPreviewState(targetString: number, targetFret: number) {
+    if (selectedIndex === null) return
+    const currentItem = progression[selectedIndex]
+    const currentVoicing = getCurrentVoicing(currentItem)
+    if (!currentVoicing) return
+
+    if (draggedNote) {
+      if (draggedNote.string === targetString && draggedNote.fret === targetFret) return
+      const targetHasNote = draggedNote.string !== targetString && currentVoicing.some(entry => entry.string === targetString)
+      if (targetHasNote) return "forbidden"
+
+      const targetNote = getFretNote(STRINGS[targetString], targetFret)
+      const updatedVoicing = currentVoicing.filter(entry => entry.string !== draggedNote.string)
+      updatedVoicing.push({
+        string: targetString,
+        fret: targetFret,
+        note: targetNote,
+        role: draggedNote.role
+      })
+
+      // Must have at least 3 notes to form a valid chord
+      if (updatedVoicing.length < 3) return "forbidden"
+
+      return canApplyVoicing(updatedVoicing) ? "allowed" : "forbidden"
+    }
+
+    if (draggedMutedString !== null) {
+      if (draggedMutedString !== targetString) return "forbidden"
+      const targetHasNote = currentVoicing.some(entry => entry.string === targetString)
+      if (targetHasNote) return "forbidden"
+
+      const targetNote = getFretNote(STRINGS[targetString], targetFret)
+      const updatedVoicing = [...currentVoicing]
+      updatedVoicing.push({
+        string: targetString,
+        fret: targetFret,
+        note: targetNote,
+        role: "1"
+      })
+
+      // Must have at least 3 notes to form a valid chord
+      if (updatedVoicing.length < 3) return "forbidden"
+
+      return canApplyVoicing(updatedVoicing) ? "allowed" : "forbidden"
+    }
+  }
+
+  function getStringPreviewState(targetString: number) {
+    if (selectedIndex === null || !draggedNote) return
+    if (draggedNote.string !== targetString) return
+    const currentItem = progression[selectedIndex]
+    const currentVoicing = getCurrentVoicing(currentItem)
+    if (!currentVoicing) return
+
+    const updatedVoicing = currentVoicing.filter(entry => entry.string !== draggedNote.string)
+    if (updatedVoicing.length < 3 || distinctChordToneCount(updatedVoicing) < 3) return "forbidden"
+    return canApplyVoicing(updatedVoicing) ? "allowed" : "forbidden"
+  }
+
+  function handleDragStartNote(note: VoicingItem, event: DragEvent<HTMLDivElement>) {
+    event.dataTransfer.effectAllowed = "move"
+    event.dataTransfer.setData("application/json", JSON.stringify(note))
+    // Create a custom drag image to prevent the default semi-transparent look
+    const dragImage = event.target as HTMLElement
+    event.dataTransfer.setDragImage(dragImage, dragImage.offsetWidth / 2, dragImage.offsetHeight / 2)
+    setDraggedNote(note)
+  }
+
+  function handleDragStartMuted(stringIndex: number, event: DragEvent<HTMLDivElement>) {
+    event.dataTransfer.effectAllowed = "move"
+    event.dataTransfer.setData("application/json", JSON.stringify({ type: "muted", string: stringIndex }))
+    // Create a custom drag image to prevent the default semi-transparent look
+    const dragImage = event.target as HTMLElement
+    event.dataTransfer.setDragImage(dragImage, dragImage.offsetWidth / 2, dragImage.offsetHeight / 2)
+    setDraggedMutedString(stringIndex)
+  }
+
+  function handleDragEndNote() {
+    setDraggedNote(null)
+  }
+
+  function handleDragEndMuted() {
+    setDraggedMutedString(null)
+  }
+
+  function handleDropOnFret(targetString: number, targetFret: number) {
+    if (!draggedNote || selectedIndex === null) return
+    const currentItem = progression[selectedIndex]
+    const currentVoicing = getCurrentVoicing(currentItem)
+    if (!currentVoicing) return
+    if (draggedNote.string === targetString && draggedNote.fret === targetFret) {
+      setDraggedNote(null)
+      return
+    }
+
+    // Check if target string already has a note (only if it's a different string)
+    const targetHasNote = draggedNote.string !== targetString && currentVoicing.some(entry => entry.string === targetString)
+    if (targetHasNote) {
+      setDraggedNote(null)
+      return
+    }
+
+    const targetNote = getFretNote(STRINGS[targetString], targetFret)
+    const updatedVoicing = currentVoicing
+      .filter(entry => entry.string !== draggedNote.string)
+
+    updatedVoicing.push({
+      string: targetString,
+      fret: targetFret,
+      note: targetNote,
+      role: draggedNote.role
+    })
+
+    updatedVoicing.sort((a, b) => a.string - b.string)
+    if (canApplyVoicing(updatedVoicing)) {
+      updateCustomVoicing(updatedVoicing)
+    }
+    setDraggedNote(null)
+  }
+
+  function handleDropOnString(targetString: number) {
+    if (!draggedNote || selectedIndex === null) return
+    if (draggedNote.string !== targetString) {
+      setDraggedNote(null)
+      return
+    }
+
+    const currentItem = progression[selectedIndex]
+    const currentVoicing = getCurrentVoicing(currentItem)
+    if (!currentVoicing) return
+
+    const updatedVoicing = currentVoicing.filter(entry => entry.string !== draggedNote.string)
+    if (updatedVoicing.length < 3 || distinctChordToneCount(updatedVoicing) < 3) {
+      setDraggedNote(null)
+      return
+    }
+
+    updatedVoicing.sort((a, b) => a.string - b.string)
+    if (canApplyVoicing(updatedVoicing)) {
+      updateCustomVoicing(updatedVoicing)
+    }
+    setDraggedNote(null)
+  }
+
+  function handleDropMutedOnFret(targetString: number, targetFret: number) {
+    if (draggedMutedString === null || selectedIndex === null) return
+    const currentItem = progression[selectedIndex]
+    const currentVoicing = getCurrentVoicing(currentItem)
+    if (!currentVoicing) return
+
+    if (draggedMutedString !== targetString) {
+      setDraggedMutedString(null)
+      return
+    }
+
+    const targetHasNote = currentVoicing.some(entry => entry.string === targetString)
+    if (targetHasNote) {
+      setDraggedMutedString(null)
+      return
+    }
+
+    const targetNote = getFretNote(STRINGS[targetString], targetFret)
+    const updatedVoicing = [...currentVoicing]
+
+    updatedVoicing.push({
+      string: targetString,
+      fret: targetFret,
+      note: targetNote,
+      role: "1"
+    })
+
+    updatedVoicing.sort((a, b) => a.string - b.string)
+    if (canApplyVoicing(updatedVoicing)) {
+      updateCustomVoicing(updatedVoicing)
+    }
+    setDraggedMutedString(null)
   }
 
   function showProgressionItem(index: number, item: ProgressionItem) {
@@ -407,7 +703,14 @@ export default function Home() {
 
     const defaultStrings = defaultStringCountForChord(val)
     const next = [...progression]
-    next[selectedIndex] = { ...next[selectedIndex], chord: val, strings: defaultStrings, voicingIndex: 0 }
+    next[selectedIndex] = {
+      ...next[selectedIndex],
+      chord: val,
+      strings: defaultStrings,
+      voicingIndex: 0,
+      customVoicing: undefined,
+      customVoicingIndex: undefined
+    }
     progressionRef.current = next
     setProgression(next)
     setInputStrings(defaultStrings)
@@ -426,7 +729,14 @@ export default function Home() {
 
     const defaultStrings = defaultStringCountForChord(chord)
     const next = [...progression]
-    next[selectedIndex] = { ...next[selectedIndex], chord, strings: defaultStrings, voicingIndex: 0 }
+    next[selectedIndex] = {
+      ...next[selectedIndex],
+      chord,
+      strings: defaultStrings,
+      voicingIndex: 0,
+      customVoicing: undefined,
+      customVoicingIndex: undefined
+    }
     progressionRef.current = next
     setProgression(next)
     setInputStrings(defaultStrings)
@@ -438,7 +748,13 @@ export default function Home() {
     if (selectedIndex === null) return
 
     const next = [...progression]
-    next[selectedIndex] = { ...next[selectedIndex], strings: val }
+    next[selectedIndex] = {
+      ...next[selectedIndex],
+      strings: val,
+      voicingIndex: 0,
+      customVoicing: undefined,
+      customVoicingIndex: undefined
+    }
     progressionRef.current = next
     setProgression(next)
     computeVoicings(next[selectedIndex])
@@ -547,7 +863,10 @@ export default function Home() {
 
     if (selectedIndex !== null && progression[selectedIndex]) {
       const next = [...progression]
-      next[selectedIndex] = { ...next[selectedIndex], voicingIndex: safeIndex }
+      next[selectedIndex] = {
+        ...next[selectedIndex],
+        voicingIndex: safeIndex
+      }
       progressionRef.current = next
       setProgression(next)
     }
@@ -805,7 +1124,7 @@ export default function Home() {
   }
 
   const current = selectedIndex !== null ? progression[selectedIndex] ?? null : null
-  const v = voicings[voicingIndex]
+  const v = voicings[voicingIndex] ?? getPinnedCustomVoicing(current)
   const canAddChord = Boolean(parseChordSymbol(inputChord.trim()))
   const canResolveBackward = resolveWithin > RESOLVE_WITHIN_OPTIONS[0]
   const canResolveForward = resolveWithin < RESOLVE_WITHIN_OPTIONS[RESOLVE_WITHIN_OPTIONS.length - 1]
@@ -819,6 +1138,10 @@ export default function Home() {
   const canPlayProgression = progression.length > 0
   const chordToneNotes: ChordToneBubble[] = useMemo(() => {
     const symbolNotes = current ? getChordDisplayNotes(current.chord, key, mode) : []
+    const fallbackCustomVoicing = getPinnedCustomVoicing(current)
+    const fallbackVoicingNotes = fallbackCustomVoicing
+      ? fallbackCustomVoicing.map((entry) => ({ note: entry.note, role: entry.role }))
+      : []
     const flashingVoicingNotes = new Set(
       (v || [])
         .filter((entry) => {
@@ -828,14 +1151,14 @@ export default function Home() {
         .map((entry) => normalizeNote(entry.note))
     )
 
-    return symbolNotes.length
-      ? symbolNotes.map((item, index) => ({
-        note: item.note,
-        role: item.role,
-        id: `${item.note}:${item.role}:${index}`,
-        isFlashing: flashingVoicingNotes.has(normalizeNote(item.note))
-      }))
-      : []
+    const displayNotes = symbolNotes.length ? symbolNotes : fallbackVoicingNotes
+
+    return displayNotes.map((item, index) => ({
+      note: item.note,
+      role: item.role,
+      id: `${item.note}:${item.role}:${index}`,
+      isFlashing: flashingVoicingNotes.has(normalizeNote(item.note))
+    }))
   }, [current, v, flashingNoteIds, key, mode])
   const chordNotes = useMemo(() => {
     return new Set(chordToneNotes.map(item => normalizeNote(item.note)))
@@ -1423,25 +1746,54 @@ export default function Home() {
                         className="relative grid items-center"
                         style={{ gridTemplateColumns: FRETBOARD_GRID }}
                       >
-                        <div className="h-10 flex items-center px-3">
+                        <div 
+                          className="h-10 flex items-center px-3 relative"
+                          onDragOver={(event) => {
+                            const preview = getStringPreviewState(stringIndex)
+                            if (preview === "allowed") {
+                              event.preventDefault()
+                              event.dataTransfer.dropEffect = "move"
+                            } else {
+                              event.dataTransfer.dropEffect = "none"
+                            }
+                          }}
+                          onDrop={() => {
+                            if (getStringPreviewState(stringIndex) !== "allowed") {
+                              return
+                            }
+
+                            if (draggedNote) {
+                              handleDropOnString(stringIndex)
+                            }
+                          }}
+                        >
                           <span className="flex items-center gap-2 text-sm font-extrabold text-[var(--ink)]">
                             <span>{s}</span>
                             <span className="min-w-6 h-6 rounded-full bg-[var(--fretboard)] px-2 flex items-center justify-center text-xs text-[#f7e5c7]">
                               {STRING_NO[stringIndex]}
                             </span>
                           </span>
+                          {(() => {
+                            const headerPreview = getStringPreviewState(stringIndex)
+                            if (!headerPreview) return null
+                            return (
+                              <div className={dragPreviewClass(headerPreview, "string")} />
+                            )
+                          })()}
                         </div>
 
                         {FRET_RANGE.map((fret) => {
                           const note = getFretNote(s, fret)
                           const displayNote = noteDisplayName(note, key, mode)
                           const isActive = active?.fret === fret
+                          const isMuted = !active && fret === 0 && !!v
                           const notePitch = normalizeNote(note)
                           const isScaleNote = scaleNotes.has(notePitch)
                           const isChordNote = chordNotes.has(notePitch)
                           const showNote = showAllNotes || isActive || (highlightScale && isScaleNote) || (highlightChordNotes && isChordNote)
                           const noteMarkerColor = noteColor(note, key)
                           const isFlashing = flashingNoteIds.has(audioNoteId(stringIndex, fret))
+                          const fretPreview = getFretPreviewState(stringIndex, fret)
 
                           return (
                             <div
@@ -1450,6 +1802,25 @@ export default function Home() {
                               style={{
                                 borderRight: '4px solid var(--fretboard-line)',
                               }}
+                              onDragOver={(event) => {
+                                if (getFretPreviewState(stringIndex, fret) === "allowed") {
+                                  event.preventDefault()
+                                  event.dataTransfer.dropEffect = "move"
+                                } else {
+                                  event.dataTransfer.dropEffect = "none"
+                                }
+                              }}
+                              onDrop={() => {
+                                if (getFretPreviewState(stringIndex, fret) !== "allowed") {
+                                  return
+                                }
+
+                                if (draggedNote) {
+                                  handleDropOnFret(stringIndex, fret)
+                                } else if (draggedMutedString !== null) {
+                                  handleDropMutedOnFret(stringIndex, fret)
+                                }
+                              }}
                             >
                               <div
                                 className="absolute left-0 right-0 top-1/2 -translate-y-1/2 rounded-full bg-[var(--fretboard-deep)]"
@@ -1457,10 +1828,27 @@ export default function Home() {
                                   height: stringThickness(stringIndex),
                                 }}
                               />
+                              {fretPreview && (
+                                <div className={dragPreviewClass(fretPreview, "fret")} />
+                              )}
+
+                              {isMuted && (
+                                <div 
+                                  draggable
+                                  onDragStart={(event) => handleDragStartMuted(stringIndex, event)}
+                                  onDragEnd={handleDragEndMuted}
+                                  className="absolute z-10 rounded-full flex items-center justify-center font-extrabold leading-none text-[var(--ink)] transition duration-150 w-7 h-7 text-xs bg-[var(--surface-muted)] cursor-grab"
+                                >
+                                  ×
+                                </div>
+                              )}
 
                               {showNote && (
                                 <div
-                                  className={`absolute z-10 rounded-full shadow-md flex items-center justify-center font-extrabold leading-none text-[var(--ink)] transition duration-150 ${noteMarkerColor} ${
+                                  draggable={isActive}
+                                  onDragStart={(event) => isActive && handleDragStartNote(active!, event)}
+                                  onDragEnd={handleDragEndNote}
+                                  className={`absolute z-10 rounded-full shadow-md flex items-center justify-center cursor-grab font-extrabold leading-none text-[var(--ink)] transition duration-150 ${noteMarkerColor} ${
                                     isActive
                                       ? "w-9 h-9 text-base border-[3px] border-[#fffaf0]"
                                       : `w-7 h-7 text-xs ${
