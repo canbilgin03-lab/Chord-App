@@ -20,6 +20,12 @@ type ChordShape = {
   roles: string[]
 }
 
+type ParsedChord = {
+  root: string
+  type: Quality
+  bass?: string
+}
+
 export type CandidateEntry = {
   string: number
   fret: number
@@ -35,10 +41,7 @@ type ChordAnalysisResult = {
   scale_notes: string[]
   diatonic_chords: string[]
   degree: string | null
-  parsed: {
-    root: string
-    type: Quality
-  }
+  parsed: ParsedChord
 }
 
 export type ProgressionSuggestionSet = {
@@ -58,6 +61,7 @@ type HarmonicFunction =
 type ResolutionPlan = {
   resolveWithin: number
   slotsToResolution: number
+  resolutionDue: boolean
   targetRoot: string
 }
 
@@ -95,10 +99,12 @@ function fretsForNote(open: string, note: string) {
   return frets
 }
 
-function parse(symbol: string): { root: string; type: Quality } {
+function parseCore(symbol: string): ParsedChord | null {
   const m = symbol.trim().match(/^([A-G](?:#|b)?)(.*)$/i)
-  const root = normalize(m?.[1] || "C")
-  const tail = (m?.[2] || "").toLowerCase()
+  if(!m) return null
+
+  const root = normalize(m[1])
+  const tail = (m[2] || "").toLowerCase()
 
   if (tail.includes("m7b5")) return { root, type:"m7b5" }
   if (tail.includes("dim7")) return { root, type:"dim7" }
@@ -118,13 +124,55 @@ function parse(symbol: string): { root: string; type: Quality } {
   return { root, type:"maj" }
 }
 
+function hasQualityTail(symbol: string) {
+  const m = symbol.trim().match(/^([A-G](?:#|b)?)(.*)$/i)
+  return Boolean(m && m[2].trim().length > 0)
+}
+
+function parse(symbol: string): ParsedChord {
+  const clean = symbol.trim().replace(/\s+/g, "")
+  const slashParts = clean.split("/")
+
+  if(slashParts.length === 2) {
+    const left = parseCore(slashParts[0])
+    const right = parseCore(slashParts[1])
+
+    if(left && right) {
+      const rightHasChordQuality = hasQualityTail(slashParts[1])
+      const leftHasChordQuality = hasQualityTail(slashParts[0])
+
+      if(rightHasChordQuality && !leftHasChordQuality) {
+        return {
+          ...right,
+          bass: left.root
+        }
+      }
+
+      return {
+        ...left,
+        bass: right.root
+      }
+    }
+  }
+
+  return parseCore(clean) || { root: "C", type: "maj" }
+}
+
 export function normalizeNote(note: string) {
   return normalize(note)
 }
 
-export function parseChordSymbol(symbol: string): { root: string; type: Quality } | null {
-  if(!symbol.trim().match(/^([A-G](?:#|b)?)(.*)$/i)) return null
+export function parseChordSymbol(symbol: string): ParsedChord | null {
+  const clean = symbol.trim().replace(/\s+/g, "")
+  if(!clean.match(/^([A-G](?:#|b)?)(.*)$/i)) return null
+  if(clean.includes("/") && !clean.split("/").every(part => parseCore(part))) return null
   return parse(symbol)
+}
+
+export function normalizeChordSymbol(symbol: string) {
+  const parsed = parseChordSymbol(symbol)
+  if(!parsed) return symbol.trim()
+  return symbolForQuality(parsed.root, parsed.type, parsed.bass)
 }
 
 export function getChordRoot(symbol: string) {
@@ -158,6 +206,54 @@ function buildChord(root: string, type: Quality): ChordShape {
   if (type==="aug") return { notes:[root,add(root,4),add(root,8)], roles:["1","3","#5"] }
 
   return { notes:[root], roles:["1"] }
+}
+
+function buildChordWithBass(parsed: ParsedChord): ChordShape {
+  const chord = buildChord(parsed.root, parsed.type)
+  if(!parsed.bass || chord.notes.includes(parsed.bass)) return chord
+
+  return {
+    notes: [...chord.notes, parsed.bass],
+    roles: [...chord.roles, "bass"]
+  }
+}
+
+function roleForBassNote(root: string, bass: string) {
+  const intervals: Record<number, string> = {
+    0: "1",
+    1: "b2",
+    2: "2",
+    3: "b3",
+    4: "3",
+    5: "4",
+    6: "b5",
+    7: "5",
+    8: "#5",
+    9: "6",
+    10: "b7",
+    11: "7"
+  }
+
+  return intervals[(idx(bass) - idx(root) + 12) % 12] || "bass"
+}
+
+export function getChordDisplayNotes(symbol: string) {
+  const parsed = parse(symbol)
+  const chord = buildChord(parsed.root, parsed.type)
+  const chordTones = chord.notes.map((note, index) => ({
+    note,
+    role: chord.roles[index]
+  }))
+
+  return parsed.bass && parsed.bass !== parsed.root
+    ? [
+      {
+        note: parsed.bass,
+        role: chord.roles[chord.notes.indexOf(parsed.bass)] || roleForBassNote(parsed.root, parsed.bass)
+      },
+      ...chordTones
+    ]
+    : chordTones
 }
 
 function groups(size:number){
@@ -296,7 +392,7 @@ function stringGroupPreferenceScore(v: CandidateEntry[], stringCount:number){
   return score
 }
 
-function scoreVoicing(v:CandidateEntry[], stringCount:number, root:string, requiresThird = true){
+function scoreVoicing(v:CandidateEntry[], stringCount:number, root:string, requiresThird = true, bass?: string){
   const frets=v.map(x=>x.fret)
   const fretted = frets.filter(fret => fret > 0)
   let score = 0
@@ -311,6 +407,11 @@ function scoreVoicing(v:CandidateEntry[], stringCount:number, root:string, requi
   score += positionCoherencePenalty(v, stringCount)
 
   const lowest = lowestPlayedString(v)
+  if(bass) {
+    score += lowest.note === bass ? -18 : 90
+    if(lowest.note === bass && lowest.string <= 1) score -= 5
+  }
+
   const isFirstPosition = Math.min(...frets) <= 3 && Math.max(...frets) <= 4
   if(stringCount >= 5 && isOpenPositionVoicing(v)) {
     const openStringCount = frets.filter(fret => fret === 0).length
@@ -336,7 +437,7 @@ function scoreVoicing(v:CandidateEntry[], stringCount:number, root:string, requi
   return score
 }
 
-function generate(chord:ChordShape,size:number){
+function generate(chord:ChordShape,size:number,bass?: string){
   const res:CandidateEntry[][]=[]
 
   for(const g of groups(size)){
@@ -354,7 +455,8 @@ function generate(chord:ChordShape,size:number){
 
     function build(i:number,curr:CandidateEntry[]){
       if(i===options.length){
-        if(containsDefiningTone(curr, chord) && isPlayableStretch(curr) && !(size >= 5 && hasSplitPositionCluster(curr))) res.push(curr)
+        const hasRequiredBass = !bass || lowestPlayedString(curr).note === bass
+        if(hasRequiredBass && containsDefiningTone(curr, chord) && isPlayableStretch(curr) && !(size >= 5 && hasSplitPositionCluster(curr))) res.push(curr)
         return
       }
       for(const o of options[i]){
@@ -507,6 +609,7 @@ type ProgressionSuggestionCandidate = {
   symbol: string
   root: string
   type: Quality
+  bass?: string
   notes: string[]
   inKey: boolean
   targetRoot: string
@@ -514,8 +617,12 @@ type ProgressionSuggestionCandidate = {
   score: number
 }
 
-function symbolForQuality(root: string, type: Quality) {
-  return `${root}${QUALITY_SUFFIX[type]}`
+function symbolForQuality(root: string, type: Quality, bass?: string) {
+  const cleanBass = bass ? normalize(bass) : undefined
+  const suffix = QUALITY_SUFFIX[type]
+  return cleanBass && cleanBass !== normalize(root)
+    ? `${root}${suffix}/${cleanBass}`
+    : `${root}${suffix}`
 }
 
 function parseProgressionSymbols(symbols: string[]) {
@@ -525,17 +632,17 @@ function parseProgressionSymbols(symbols: string[]) {
       if(!clean) return null
       const parsed = parse(clean)
       return {
-        symbol: symbolForQuality(parsed.root, parsed.type),
+        symbol: symbolForQuality(parsed.root, parsed.type, parsed.bass),
         parsed,
-        notes: buildChord(parsed.root, parsed.type).notes
+        notes: buildChordWithBass(parsed).notes
       }
     })
-    .filter((item): item is { symbol: string; parsed: { root: string; type: Quality }; notes: string[] } => Boolean(item))
+    .filter((item): item is { symbol: string; parsed: ParsedChord; notes: string[] } => Boolean(item))
 }
 
 function chordNotesForSymbol(symbol: string) {
   const parsed = parse(symbol)
-  return buildChord(parsed.root, parsed.type).notes
+  return buildChordWithBass(parsed).notes
 }
 
 function isInKeyNotes(notes: string[], scaleSet: Set<string>) {
@@ -599,6 +706,10 @@ function voiceLeadingScore(fromNotes: string[], toNotes: string[]) {
   return score
 }
 
+function bassNoteForParsed(parsed: ParsedChord) {
+  return parsed.bass ?? parsed.root
+}
+
 function targetMotionScores(lastDegree: number | null) {
   const scores = [18,18,18,18,18,18,18]
   if(lastDegree === null || lastDegree < 0) return scores
@@ -624,12 +735,12 @@ function buildResolutionPlan(progressionLength: number, key: string, mode: strin
   const safeResolveWithin = Math.max(2, Math.min(8, Math.round(resolveWithin)))
   const scale = buildScaleFromMode(key, mode)
   const elapsed = progressionLength % safeResolveWithin
+  const resolutionDue = elapsed === 0 && progressionLength > 0
 
   return {
     resolveWithin: safeResolveWithin,
-    slotsToResolution: elapsed === 0 && progressionLength > 0
-      ? safeResolveWithin
-      : safeResolveWithin - elapsed,
+    slotsToResolution: resolutionDue ? 0 : safeResolveWithin - elapsed,
+    resolutionDue,
     targetRoot: scale[0]
   }
 }
@@ -703,12 +814,22 @@ function resolutionIntentScore(candidate: ProgressionSuggestionCandidate, plan: 
     candidate.functionCategory === "secondaryDominant" ||
     candidate.functionCategory === "leadingTone"
 
-  if(plan.slotsToResolution <= 1) {
+  if(plan.resolutionDue) {
     let score = 0
-    if(isResolutionRoot) score += 42
-    else if(isTonicFamily) score += 22
-    if(!candidate.inKey) score -= 24
-    if(isCadentialTension && !isResolutionRoot) score -= 10
+    if(isResolutionRoot) score += 86
+    else if(isTonicFamily) score += 34
+    if(!candidate.inKey) score -= 42
+    if(isCadentialTension && !isResolutionRoot) score -= 28
+    return score
+  }
+
+  if(plan.slotsToResolution === 1) {
+    let score = 0
+    if(resolvesToTarget && candidate.functionCategory === "secondaryDominant") score += 46
+    if(resolvesToTarget && candidate.functionCategory === "leadingTone") score += 42
+    if(candidate.inKey && candidate.functionCategory === "dominant") score += 34
+    if(candidate.inKey && candidate.functionCategory === "predominant") score += 14
+    if(isResolutionRoot || isTonicFamily) score -= 18
     return score
   }
 
@@ -759,6 +880,38 @@ function phrasePositionScore(candidate: ProgressionSuggestionCandidate, plan: Re
   return 0
 }
 
+function bassMotionScore(
+  candidate: ProgressionSuggestionCandidate,
+  progression: ReturnType<typeof parseProgressionSymbols>,
+  scaleSet: Set<string>,
+  plan: ResolutionPlan
+) {
+  if(!candidate.bass) return 0
+
+  const last = progression[progression.length - 1]
+  let score = -20
+
+  if(last) {
+    const lastBass = bassNoteForParsed(last.parsed)
+    const motion = semitoneDistance(lastBass, candidate.bass)
+
+    if(motion === 1) score += 34
+    else if(motion === 2) score += 28
+    else if(motion === 3) score += 12
+    else if(motion === 4 || motion === 5) score += 7
+    else if(motion === 0) score -= 26
+    else score -= 8
+
+    if(last.parsed.bass && motion <= 2 && motion > 0) score += 8
+  }
+
+  if(candidate.bass === candidate.targetRoot) score += 12
+  if(plan.resolutionDue && candidate.bass === plan.targetRoot) score += 18
+  score += scaleSet.has(candidate.bass) ? 6 : -8
+
+  return score
+}
+
 function addCandidate(
   candidates: ProgressionSuggestionCandidate[],
   seen: Set<string>,
@@ -768,7 +921,7 @@ function addCandidate(
   scaleSet: Set<string>
 ) {
   const parsed = parse(symbol)
-  const cleanSymbol = symbolForQuality(parsed.root, parsed.type)
+  const cleanSymbol = symbolForQuality(parsed.root, parsed.type, parsed.bass)
   if(seen.has(cleanSymbol)) return
 
   const notes = chordNotesForSymbol(cleanSymbol)
@@ -777,6 +930,7 @@ function addCandidate(
     symbol: cleanSymbol,
     root: parsed.root,
     type: parsed.type,
+    bass: parsed.bass,
     notes,
     inKey,
     targetRoot: normalize(targetRoot),
@@ -790,6 +944,37 @@ function addCandidate(
     score: 0
   })
   seen.add(cleanSymbol)
+}
+
+function buildSlashProgressionCandidates(
+  baseCandidates: ProgressionSuggestionCandidate[],
+  scale: string[],
+  scaleSet: Set<string>
+) {
+  const candidates: ProgressionSuggestionCandidate[] = []
+  const seen = new Set<string>()
+
+  for(const candidate of baseCandidates) {
+    const bassOptions = [
+      ...candidate.notes,
+      candidate.targetRoot
+    ].filter((note, index, arr) => {
+      return note !== candidate.root && arr.indexOf(note) === index && (scaleSet.has(note) || note === candidate.targetRoot)
+    })
+
+    for(const bass of bassOptions) {
+      addCandidate(
+        candidates,
+        seen,
+        symbolForQuality(candidate.root, candidate.type, bass),
+        candidate.targetRoot,
+        scale,
+        scaleSet
+      )
+    }
+  }
+
+  return candidates
 }
 
 function buildDiatonicProgressionCandidates(scale: string[], scaleSet: Set<string>, mode: string, complex: boolean) {
@@ -865,6 +1050,7 @@ function scoreProgressionCandidates(
 ) {
   const scale = buildScaleFromMode(key, mode)
   const targetScores = progressionTargetScores(progression, key, mode)
+  const scaleSet = new Set(scale)
   const last = progression[progression.length - 1]
   const recentSymbols = progression.slice(-3).map(item => item.symbol)
   const recentRoots = progression.slice(-3).map(item => item.parsed.root)
@@ -881,6 +1067,7 @@ function scoreProgressionCandidates(
     if(!candidate.inKey) score += leadingTonePullScore(candidate, scale, new Set(scale))
     score += resolutionIntentScore(candidate, resolutionPlan, scale)
     score += phrasePositionScore(candidate, resolutionPlan)
+    score += bassMotionScore(candidate, progression, scaleSet, resolutionPlan)
 
     if(last && candidate.root === last.parsed.root && candidate.type !== last.parsed.type) {
       score += candidate.inKey ? 4 : 18
@@ -897,6 +1084,7 @@ function scoreProgressionCandidates(
   }).sort((a, b) => {
     if(b.score !== a.score) return b.score - a.score
     if(a.targetRoot !== b.targetRoot) return idx(a.targetRoot) - idx(b.targetRoot)
+    if(Boolean(a.bass) !== Boolean(b.bass)) return a.bass ? 1 : -1
     return a.symbol.localeCompare(b.symbol)
   })
 }
@@ -905,40 +1093,83 @@ function pickByKeyStatus(candidates: ProgressionSuggestionCandidate[], inKey: bo
   const picked: string[] = []
   const usedRoots = new Set<string>()
   const usedFunctions = new Set<HarmonicFunction>()
+  let usedSlashChord = false
 
   for(const candidate of candidates) {
     if(
       candidate.inKey !== inKey ||
       used.has(candidate.symbol) ||
       usedRoots.has(candidate.root) ||
-      usedFunctions.has(candidate.functionCategory)
+      usedFunctions.has(candidate.functionCategory) ||
+      (candidate.bass && usedSlashChord)
     ) continue
     picked.push(candidate.symbol)
     used.add(candidate.symbol)
     usedRoots.add(candidate.root)
     usedFunctions.add(candidate.functionCategory)
+    if(candidate.bass) usedSlashChord = true
     if(picked.length === count) return picked
   }
 
   for(const candidate of candidates) {
     if(candidate.inKey !== inKey || used.has(candidate.symbol)) continue
     if(usedRoots.has(candidate.root)) continue
+    if(candidate.bass && usedSlashChord) continue
     picked.push(candidate.symbol)
     used.add(candidate.symbol)
     usedRoots.add(candidate.root)
     usedFunctions.add(candidate.functionCategory)
+    if(candidate.bass) usedSlashChord = true
     if(picked.length === count) return picked
   }
 
   for(const candidate of candidates) {
     if(candidate.inKey !== inKey || used.has(candidate.symbol)) continue
+    if(candidate.bass && usedSlashChord) continue
     picked.push(candidate.symbol)
     used.add(candidate.symbol)
     usedFunctions.add(candidate.functionCategory)
+    if(candidate.bass) usedSlashChord = true
     if(picked.length === count) return picked
   }
 
   return picked
+}
+
+function tonicResolutionSymbol(key: string, mode: string) {
+  return buildDiatonicChords(key, mode)[0] || symbolForQuality(normalize(key), "maj")
+}
+
+function tonicResolutionOverlap(candidate: ProgressionSuggestionCandidate, tonicNotes: string[]) {
+  return candidate.notes.filter(note => tonicNotes.includes(note)).length
+}
+
+function pickTonicResolutionVariations(
+  candidates: ProgressionSuggestionCandidate[],
+  tonicSymbol: string,
+  count: number,
+  used: Set<string>
+) {
+  const tonicNotes = chordNotesForSymbol(tonicSymbol)
+  const tonicRoot = parse(tonicSymbol).root
+
+  return candidates
+    .filter(candidate => {
+      if(used.has(candidate.symbol) || candidate.symbol === tonicSymbol) return false
+      if(candidate.root === tonicRoot) return true
+      return tonicResolutionOverlap(candidate, tonicNotes) >= 2
+    })
+    .sort((a, b) => {
+      const bOverlap = tonicResolutionOverlap(b, tonicNotes)
+      const aOverlap = tonicResolutionOverlap(a, tonicNotes)
+      if(bOverlap !== aOverlap) return bOverlap - aOverlap
+      if(a.root === tonicRoot && b.root !== tonicRoot) return -1
+      if(b.root === tonicRoot && a.root !== tonicRoot) return 1
+      if(b.score !== a.score) return b.score - a.score
+      return a.symbol.localeCompare(b.symbol)
+    })
+    .slice(0, count)
+    .map(candidate => candidate.symbol)
 }
 
 export function buildProgressionSuggestions({
@@ -959,16 +1190,55 @@ export function buildProgressionSuggestions({
   const scale = buildScaleFromMode(key, mode)
   const scaleSet = new Set(scale)
   const resolutionPlan = buildResolutionPlan(parsedProgression.length, key, mode, resolveWithin)
-
-  const simpleCandidates = scoreProgressionCandidates([
+  const simpleBaseCandidates = [
     ...buildDiatonicProgressionCandidates(scale, scaleSet, mode, false),
     ...buildChromaticProgressionCandidates(scale, scaleSet, false)
-  ], fallback, key, mode, false, resolutionPlan)
-
-  const complexCandidates = scoreProgressionCandidates([
+  ]
+  const complexBaseCandidates = [
     ...buildDiatonicProgressionCandidates(scale, scaleSet, mode, true),
     ...buildChromaticProgressionCandidates(scale, scaleSet, true)
-  ], fallback, key, mode, true, resolutionPlan)
+  ]
+
+  const simpleCandidates = scoreProgressionCandidates(
+    simpleBaseCandidates,
+    fallback,
+    key,
+    mode,
+    false,
+    resolutionPlan
+  )
+
+  const complexCandidates = scoreProgressionCandidates(
+    [
+      ...complexBaseCandidates,
+      ...buildSlashProgressionCandidates(complexBaseCandidates, scale, scaleSet)
+    ],
+    fallback,
+    key,
+    mode,
+    true,
+    resolutionPlan
+  )
+
+  if(resolutionPlan.resolutionDue) {
+    const tonicSymbol = tonicResolutionSymbol(key, mode)
+    const simpleUsed = new Set<string>([tonicSymbol])
+    const simple = [tonicSymbol]
+
+    simple.push(...pickByKeyStatus(simpleCandidates, true, 2, simpleUsed).slice(0, Math.max(0, 5 - simple.length)))
+    simple.push(...pickByKeyStatus(simpleCandidates, false, 3, simpleUsed).slice(0, Math.max(0, 5 - simple.length)))
+
+    const complexUsed = new Set(simple)
+    const complex = pickTonicResolutionVariations(complexCandidates, tonicSymbol, 5, complexUsed)
+    for(const symbol of complex) complexUsed.add(symbol)
+    complex.push(...pickByKeyStatus(complexCandidates, true, 3, complexUsed).slice(0, Math.max(0, 5 - complex.length)))
+    complex.push(...pickByKeyStatus(complexCandidates, false, 3, complexUsed).slice(0, Math.max(0, 5 - complex.length)))
+
+    return {
+      simple,
+      complex
+    }
+  }
 
   const simpleUsed = new Set<string>()
   const simple = [
@@ -994,7 +1264,14 @@ function getDegree(symbol: string, key: string) {
   const keyIdx = idx(key)
 
   if (rootIdx < 0 || keyIdx < 0) return null
-  return DEGREE_LABELS[(rootIdx - keyIdx + 12) % 12] || null
+  const rootDegree = DEGREE_LABELS[(rootIdx - keyIdx + 12) % 12] || null
+  if(!rootDegree) return null
+  if(!parsed.bass || parsed.bass === parsed.root) return rootDegree
+
+  const bassIdx = idx(parsed.bass)
+  if(bassIdx < 0) return rootDegree
+  const bassDegree = DEGREE_LABELS[(bassIdx - keyIdx + 12) % 12] || parsed.bass
+  return `${rootDegree}/${bassDegree}`
 }
 
 function voicingLimitForStringCount(stringCount: number) {
@@ -1041,14 +1318,14 @@ export function analyzeChord({
 }):ChordAnalysisResult{
 
   const parsed=parse(symbol)
-  const chord=buildChord(parsed.root,parsed.type)
+  const chord=buildChordWithBass(parsed)
 
-  const raw=generate(chord,stringCount)
+  const raw=generate(chord,stringCount, parsed.bass)
 
   const scored=raw.map(v=>({
     v,
     pos:positionMetric(v),
-    score:scoreVoicing(v, stringCount, parsed.root, chordRequiresThird(chord))
+    score:scoreVoicing(v, stringCount, parsed.root, chordRequiresThird(chord), parsed.bass)
   }))
   .sort((a,b)=>{
     if(stringCount === 3 || stringCount === 4) {
@@ -1114,7 +1391,7 @@ export function analyzeChord({
 
   const voicings = mergeCanonicalVoicings(
     dedupe(result),
-    canonicalBarreVoicings(chord, parsed.root, parsed.type, stringCount),
+    parsed.bass ? [] : canonicalBarreVoicings(chord, parsed.root, parsed.type, stringCount),
     voicingLimit,
     stringCount
   )

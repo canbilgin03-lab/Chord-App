@@ -1,14 +1,16 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   analyzeChord,
   buildDiatonicChords,
   buildProgressionSuggestions,
   buildScaleFromMode,
   getChordRoot,
+  getChordDisplayNotes,
   getFretNote,
   getNoteIndex,
+  normalizeChordSymbol,
   parseChordSymbol,
   type Fret,
   type Quality
@@ -32,6 +34,33 @@ const DISPLAY_FRETS = 19
 const FRET_RANGE = Array.from({ length: DISPLAY_FRETS }, (_, fret) => fret)
 const FRETBOARD_GRID = `80px 48px repeat(${DISPLAY_FRETS - 1}, minmax(42px, 1fr))`
 const FRETBOARD_HEADER_HEIGHT = 48
+const OPEN_STRING_MIDI = [40, 45, 50, 55, 59, 64]
+const MIDI_NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+const AUDIO_STEP_SECONDS = {
+  tight: 0.055,
+  easy: 0.085,
+  slow: 0.125
+}
+const AUDIO_LEAD_SECONDS = 0.055
+const AUDIO_REPEAT_OPTIONS = [1, 2, 3, 4]
+const GUITAR_SAMPLE_BASE_URL = "/audio/guitar-acoustic/"
+const GUITAR_SAMPLE_URLS = {
+  E2: "E2.mp3",
+  G2: "G2.mp3",
+  A2: "A2.mp3",
+  B2: "B2.mp3",
+  D3: "D3.mp3",
+  E3: "E3.mp3",
+  G3: "G3.mp3",
+  A3: "A3.mp3",
+  B3: "B3.mp3",
+  D4: "D4.mp3",
+  E4: "E4.mp3",
+  G4: "G4.mp3",
+  A4: "A4.mp3",
+  B4: "B4.mp3",
+  D5: "D5.mp3"
+}
 
 type ProgressionItem = {
   chord: string
@@ -44,6 +73,34 @@ type VoicingItem = {
   fret: Fret
   note: string
   role: string
+}
+
+type AudioDirection = "down" | "up"
+type AudioSpeed = keyof typeof AUDIO_STEP_SECONDS
+
+type AudioNote = {
+  label: string
+  note: string
+  stringNo: number
+  stringIndex: number
+  fret: number
+  id: string
+}
+
+type ChordToneBubble = {
+  note: string
+  role: string
+  id: string
+  isFlashing: boolean
+}
+
+type ToneEngine = {
+  Tone: typeof import("tone")
+  sampler: import("tone").Sampler
+  gain: import("tone").Gain
+  filter: import("tone").Filter
+  delay: import("tone").FeedbackDelay
+  reverb: import("tone").Reverb
 }
 
 function romanForQuality(roman: string, quality: Quality) {
@@ -104,7 +161,12 @@ function getDegree(chord:string, key:string){
   }
 
   const roman = romanForQuality(MAP[diff], parsed.type)
-  return `${roman}${qualityDegreeSuffix(parsed.type)}`
+  const bassIdx = parsed.bass ? getNoteIndex(parsed.bass) : -1
+  const bassDegree = bassIdx >= 0 && parsed.bass !== parsed.root
+    ? `/${MAP[(bassIdx - keyIdx + 12) % 12]}`
+    : ""
+
+  return `${roman}${qualityDegreeSuffix(parsed.type)}${bassDegree}`
 }
 
 const COLORS = [
@@ -135,6 +197,10 @@ function chordColor(chord:string, key:string){
   return COLORS[diff]
 }
 
+function chordDisplayName(chord: string) {
+  return normalizeChordSymbol(chord)
+}
+
 function noteColor(note:string, key:string){
   const idx = getNoteIndex(note)
   const keyIdx = getNoteIndex(key)
@@ -146,6 +212,63 @@ function noteColor(note:string, key:string){
 
 function stringThickness(stringIndex: number) {
   return `${7 - stringIndex}px`
+}
+
+function midiToToneNote(midi: number) {
+  const name = MIDI_NOTE_NAMES[midi % 12]
+  const octave = Math.floor(midi / 12) - 1
+  return `${name}${octave}`
+}
+
+function audioNoteId(stringIndex: number, fret: number) {
+  return `${stringIndex}:${fret}`
+}
+
+function voicingAudioNotes(voicing: VoicingItem[] | undefined, direction: AudioDirection): AudioNote[] {
+  if(!voicing) return []
+
+  return [...voicing]
+    .filter((entry) => typeof entry.fret === "number")
+    .sort((a, b) => direction === "down" ? a.string - b.string : b.string - a.string)
+    .map((entry) => {
+      const fret = typeof entry.fret === "number" ? entry.fret : 0
+      return {
+        label: entry.note,
+        note: midiToToneNote(OPEN_STRING_MIDI[entry.string] + fret),
+        stringNo: STRING_NO[entry.string],
+        stringIndex: entry.string,
+        fret,
+        id: audioNoteId(entry.string, fret)
+      }
+    })
+}
+
+function humanizedOffset(index: number) {
+  return [0, 0.005, -0.003, 0.008, -0.002, 0.004][index % 6]
+}
+
+function humanizedVelocity(index: number) {
+  const firstStringAccent = index === 0 ? 0.07 : 0
+  return Math.max(0.48, Math.min(0.86, 0.76 + firstStringAccent - index * 0.035))
+}
+
+function PlayMark({ paused = false, large = false }: { paused?: boolean; large?: boolean }) {
+  const wrapperSize = large ? "h-9 w-9" : "h-5 w-5"
+
+  if(paused) {
+    return (
+      <span className={`flex ${wrapperSize} items-center justify-center gap-1.5`} aria-hidden="true">
+        <span className={`${large ? "h-9 w-3" : "h-5 w-2"} rounded-full bg-current`} />
+        <span className={`${large ? "h-9 w-3" : "h-5 w-2"} rounded-full bg-current`} />
+      </span>
+    )
+  }
+
+  return (
+    <span className={`relative ${wrapperSize}`} aria-hidden="true">
+      <span className={`${large ? "left-1 top-0 h-9 w-8" : "left-1 top-0 h-5 w-4"} absolute rounded-r-full bg-current [clip-path:polygon(0_0,100%_50%,0_100%)]`} />
+    </span>
+  )
 }
 
 export default function Home() {
@@ -163,6 +286,25 @@ export default function Home() {
   const [resolveWithin, setResolveWithin] = useState(4)
   const [showAllNotes, setShowAllNotes] = useState(false)
   const [highlightScale, setHighlightScale] = useState(false)
+  const [highlightChordNotes, setHighlightChordNotes] = useState(false)
+  const audioDirection: AudioDirection = "down"
+  const [audioSpeed, setAudioSpeed] = useState<AudioSpeed>("tight")
+  const [audioRepeats, setAudioRepeats] = useState(1)
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false)
+  const [isProgressionPlaying, setIsProgressionPlaying] = useState(false)
+  const [isProgressionLooping, setIsProgressionLooping] = useState(true)
+  const [progressionPlayIndex, setProgressionPlayIndex] = useState<number | null>(null)
+  const [flashingNoteIds, setFlashingNoteIds] = useState<Set<string>>(() => new Set())
+  const audioSpeedRef = useRef<AudioSpeed>("tight")
+  const audioRepeatsRef = useRef(1)
+  const progressionRef = useRef<ProgressionItem[]>([])
+  const audioEngineRef = useRef<ToneEngine | null>(null)
+  const audioEnginePromiseRef = useRef<Promise<ToneEngine> | null>(null)
+  const audioTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const noteFlashTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([])
+  const progressionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const progressionPlayingRef = useRef(false)
+  const progressionLoopingRef = useRef(true)
 
   function computeVoicings(item: ProgressionItem) {
     const res = analyzeChord({
@@ -180,6 +322,14 @@ export default function Home() {
       : 0
 
     setVoicingIndex(safeIndex)
+  }
+
+  function showProgressionItem(index: number, item: ProgressionItem) {
+    setSelectedIndex(index)
+    setInputChord(item.chord)
+    setInputStrings(item.strings)
+    setVoicingIndex(item.voicingIndex ?? 0)
+    computeVoicings(item)
   }
 
   const keyChords = useMemo(() => {
@@ -207,11 +357,7 @@ export default function Home() {
       return
     }
 
-    setSelectedIndex(idx)
-    setInputChord(item.chord)
-    setInputStrings(item.strings)
-    setVoicingIndex(item.voicingIndex ?? 0)
-    computeVoicings(item)
+    showProgressionItem(idx, item)
   }
 
   function updateChord(val: string) {
@@ -220,6 +366,24 @@ export default function Home() {
 
     const next = [...progression]
     next[selectedIndex] = { ...next[selectedIndex], chord: val }
+    progressionRef.current = next
+    setProgression(next)
+    computeVoicings(next[selectedIndex])
+  }
+
+  function normalizeCurrentInputChord() {
+    const clean = inputChord.trim()
+    if(!clean) return
+
+    const chord = normalizeChordSymbol(clean)
+    if(chord === inputChord) return
+
+    setInputChord(chord)
+    if(selectedIndex === null) return
+
+    const next = [...progression]
+    next[selectedIndex] = { ...next[selectedIndex], chord }
+    progressionRef.current = next
     setProgression(next)
     computeVoicings(next[selectedIndex])
   }
@@ -230,6 +394,7 @@ export default function Home() {
 
     const next = [...progression]
     next[selectedIndex] = { ...next[selectedIndex], strings: val }
+    progressionRef.current = next
     setProgression(next)
     computeVoicings(next[selectedIndex])
   }
@@ -248,21 +413,39 @@ export default function Home() {
     setResolveWithin(RESOLVE_WITHIN_OPTIONS[nextIndex])
   }
 
+  function stepAudioRepeats(direction: -1 | 1) {
+    const currentIndex = AUDIO_REPEAT_OPTIONS.indexOf(audioRepeats)
+    const safeIndex = currentIndex >= 0 ? currentIndex : 0
+    const nextIndex = Math.max(0, Math.min(AUDIO_REPEAT_OPTIONS.length - 1, safeIndex + direction))
+    setAudioRepeats(AUDIO_REPEAT_OPTIONS[nextIndex])
+  }
+
+  function cycleAudioSpeed() {
+    setAudioSpeed((current) => current === "tight" ? "easy" : current === "easy" ? "slow" : "tight")
+  }
+
   function addChord() {
     const clean = inputChord.trim()
     if (!clean) return
+    const chord = normalizeChordSymbol(clean)
 
-    const next = [...progression, { chord: clean, strings: inputStrings, voicingIndex: 0 }]
+    const next = [...progression, { chord, strings: inputStrings, voicingIndex: 0 }]
+    progressionRef.current = next
     setProgression(next)
 
     const i = next.length - 1
     setSelectedIndex(i)
+    setInputChord(chord)
     setVoicingIndex(0)
     computeVoicings(next[i])
+    if(progressionPlayingRef.current && progressionPlayIndex === null) {
+      setProgressionPlayIndex(i)
+    }
   }
 
   function addSuggestion(chord: string) {
     const next = [...progression, { chord, strings: 4, voicingIndex: 0 }]
+    progressionRef.current = next
     setProgression(next)
 
     const i = next.length - 1
@@ -276,7 +459,9 @@ export default function Home() {
   function removeChord(index: number) {
     const next = [...progression]
     next.splice(index, 1)
+    progressionRef.current = next
     setProgression(next)
+    if(next.length === 0) stopProgressionAudio()
 
     if(selectedIndex === index) {
       setSelectedIndex(null)
@@ -294,6 +479,7 @@ export default function Home() {
 
     const next = [...progression]
     ;[next[target], next[index]] = [next[index], next[target]]
+    progressionRef.current = next
     setProgression(next)
     setSelectedIndex(target)
     setInputChord(next[target].chord)
@@ -310,7 +496,258 @@ export default function Home() {
     if (selectedIndex !== null && progression[selectedIndex]) {
       const next = [...progression]
       next[selectedIndex] = { ...next[selectedIndex], voicingIndex: safeIndex }
+      progressionRef.current = next
       setProgression(next)
+    }
+  }
+
+  async function ensureAudioEngine() {
+    if(audioEngineRef.current?.sampler.loaded) return audioEngineRef.current
+    if(audioEnginePromiseRef.current) return audioEnginePromiseRef.current
+
+    audioEnginePromiseRef.current = (async () => {
+      const Tone = await import("tone")
+      await Tone.start()
+
+      const gain = new Tone.Gain(0.72).toDestination()
+      const reverb = new Tone.Reverb(1.25).connect(gain)
+      reverb.wet.value = 0.09
+
+      const delay = new Tone.FeedbackDelay(0.045, 0.08).connect(reverb)
+      delay.wet.value = 0.055
+
+      const filter = new Tone.Filter(3450, "lowpass")
+      filter.connect(gain)
+      filter.connect(delay)
+      const sampler = new Tone.Sampler({
+        urls: GUITAR_SAMPLE_URLS,
+        baseUrl: GUITAR_SAMPLE_BASE_URL,
+        attack: 0.002,
+        release: 0.86,
+        curve: "exponential",
+        onerror: (error) => {
+          console.error("Guitar sample load failed", error)
+        }
+      }).connect(filter)
+
+      const engine: ToneEngine = {
+        Tone,
+        sampler,
+        gain,
+        filter,
+        delay,
+        reverb
+      }
+
+      try {
+        await Tone.loaded()
+      } catch(error) {
+        sampler.dispose()
+        filter.dispose()
+        delay.dispose()
+        reverb.dispose()
+        gain.dispose()
+        audioEngineRef.current = null
+        throw error
+      }
+
+      audioEngineRef.current = engine
+      audioEnginePromiseRef.current = null
+      return engine
+    })()
+
+    return audioEnginePromiseRef.current
+  }
+
+  function applyAudioTone(engine: ToneEngine) {
+    engine.filter.frequency.value = 3450
+    engine.gain.gain.value = 0.72
+  }
+
+  async function prepareAudioEngine() {
+    const engine = await ensureAudioEngine().catch((error) => {
+      console.error("Audio engine failed to start", error)
+      audioEnginePromiseRef.current = null
+      return null
+    })
+    if(!engine?.sampler.loaded) return null
+
+    await engine.Tone.start()
+    applyAudioTone(engine)
+    return engine
+  }
+
+  function clearNoteFlashes() {
+    noteFlashTimeoutsRef.current.forEach(clearTimeout)
+    noteFlashTimeoutsRef.current = []
+    setFlashingNoteIds(new Set())
+  }
+
+  function flashAudioNotes(notes: AudioNote[], mode: "strum" | "chord", step: number) {
+    const flashDuration = 210
+    notes.forEach((item, index) => {
+      const noteDelay = mode === "chord" ? index * 12 : index * step * 1000
+      const delay = AUDIO_LEAD_SECONDS * 1000 + noteDelay
+      const startTimeout = setTimeout(() => {
+        setFlashingNoteIds((current) => {
+          const next = new Set(current)
+          next.add(item.id)
+          return next
+        })
+
+        const endTimeout = setTimeout(() => {
+          setFlashingNoteIds((current) => {
+            const next = new Set(current)
+            next.delete(item.id)
+            return next
+          })
+        }, flashDuration)
+        noteFlashTimeoutsRef.current.push(endTimeout)
+      }, delay)
+
+      noteFlashTimeoutsRef.current.push(startTimeout)
+    })
+  }
+
+  function finishAudioAfter(ms: number) {
+    if(audioTimeoutRef.current) clearTimeout(audioTimeoutRef.current)
+    setIsAudioPlaying(true)
+    audioTimeoutRef.current = setTimeout(() => setIsAudioPlaying(false), ms)
+  }
+
+  async function playAudioNotes(notes: AudioNote[], mode: "strum" | "chord") {
+    if(notes.length === 0) return 0
+    const engine = await prepareAudioEngine()
+    if(!engine) return 0
+
+    const speed = audioSpeedRef.current
+    const now = engine.Tone.now() + AUDIO_LEAD_SECONDS
+    const step = AUDIO_STEP_SECONDS[speed]
+    clearNoteFlashes()
+    flashAudioNotes(notes, mode, step)
+
+    if(mode === "chord") {
+      notes.forEach((item, index) => {
+        engine.sampler.triggerAttackRelease(item.note, 1.35, now + index * 0.012 + humanizedOffset(index), humanizedVelocity(index))
+      })
+      return 1180
+    }
+
+    notes.forEach((item, index) => {
+      const noteLength = speed === "tight" ? 1.05 : speed === "easy" ? 1.18 : 1.34
+      engine.sampler.triggerAttackRelease(item.note, noteLength, now + index * step + humanizedOffset(index), humanizedVelocity(index))
+    })
+
+    return Math.round((notes.length - 1) * step * 1000 + 980)
+  }
+
+  async function playVoicingAudio(mode: "strum" | "chord") {
+    if(audioNotes.length === 0) return
+    setIsAudioPlaying(true)
+    const duration = await playAudioNotes(audioNotes, mode)
+    if(duration > 0) {
+      finishAudioAfter(duration)
+      return
+    }
+    setIsAudioPlaying(false)
+  }
+
+  function audioNotesForProgressionItem(item: ProgressionItem) {
+    const result = analyzeChord({
+      symbol: item.chord,
+      stringCount: item.strings,
+      key,
+      mode
+    })
+    const safeIndex = result.voicings.length > 0
+      ? Math.min(item.voicingIndex ?? 0, result.voicings.length - 1)
+      : 0
+
+    return voicingAudioNotes(result.voicings[safeIndex] as VoicingItem[] | undefined, audioDirection)
+  }
+
+  function stopProgressionAudio() {
+    progressionPlayingRef.current = false
+    if(progressionTimeoutRef.current) clearTimeout(progressionTimeoutRef.current)
+    progressionTimeoutRef.current = null
+    audioEngineRef.current?.sampler.releaseAll()
+    clearNoteFlashes()
+    setIsProgressionPlaying(false)
+    setProgressionPlayIndex(null)
+  }
+
+  async function playProgressionFrom(startIndex = 0) {
+    if(progressionRef.current.length === 0) return
+    if(progressionTimeoutRef.current) clearTimeout(progressionTimeoutRef.current)
+    progressionTimeoutRef.current = null
+    progressionPlayingRef.current = true
+    setIsProgressionPlaying(true)
+
+    const engine = await prepareAudioEngine()
+    if(!engine) {
+      stopProgressionAudio()
+      return
+    }
+    if(!progressionPlayingRef.current) return
+    engine.sampler.releaseAll()
+
+    let index = startIndex
+    let repeatsDone = 0
+    const playNext = async () => {
+      if(!progressionPlayingRef.current) return
+      const currentProgression = progressionRef.current
+
+      if(currentProgression.length === 0) {
+        stopProgressionAudio()
+        return
+      }
+
+      if(index >= currentProgression.length) {
+        if(!progressionLoopingRef.current) {
+          stopProgressionAudio()
+          return
+        }
+        index = 0
+      }
+
+      setProgressionPlayIndex(index)
+      const currentItem = currentProgression[index]
+      showProgressionItem(index, currentItem)
+      const notes = audioNotesForProgressionItem(currentItem)
+      const duration = await playAudioNotes(notes, "strum")
+      if(duration <= 0) {
+        stopProgressionAudio()
+        return
+      }
+      const nextDelay = Math.max(duration + 180, 520)
+
+      repeatsDone += 1
+      if(repeatsDone >= audioRepeatsRef.current) {
+        repeatsDone = 0
+        index += 1
+      }
+      progressionTimeoutRef.current = setTimeout(() => void playNext(), nextDelay)
+    }
+
+    void playNext()
+  }
+
+  function toggleProgressionAudio() {
+    if(progressionPlayingRef.current) {
+      stopProgressionAudio()
+      return
+    }
+
+    void playProgressionFrom(selectedIndex ?? progressionPlayIndex ?? 0)
+  }
+
+  function toggleProgressionLoop() {
+    const next = !isProgressionLooping
+    progressionLoopingRef.current = next
+    setIsProgressionLooping(next)
+    if(progressionPlayingRef.current && progressionPlayIndex !== null) {
+      const item = progressionRef.current[progressionPlayIndex]
+      if(item) showProgressionItem(progressionPlayIndex, item)
     }
   }
 
@@ -319,21 +756,82 @@ export default function Home() {
   const canAddChord = inputChord.trim().length > 0
   const canResolveBackward = resolveWithin > RESOLVE_WITHIN_OPTIONS[0]
   const canResolveForward = resolveWithin < RESOLVE_WITHIN_OPTIONS[RESOLVE_WITHIN_OPTIONS.length - 1]
+  const canRepeatLess = audioRepeats > AUDIO_REPEAT_OPTIONS[0]
+  const canRepeatMore = audioRepeats < AUDIO_REPEAT_OPTIONS[AUDIO_REPEAT_OPTIONS.length - 1]
   const canStepStringsBackward = inputStrings > STRING_COUNTS[0]
   const canStepStringsForward = inputStrings < STRING_COUNTS[STRING_COUNTS.length - 1]
   const canStepVoicingBackward = voicingIndex > 0
   const canStepVoicingForward = voicings.length > 0 && voicingIndex < voicings.length - 1
+  const audioNotes = voicingAudioNotes(v, audioDirection)
+  const canPlayProgression = progression.length > 0
+  const chordToneNotes: ChordToneBubble[] = useMemo(() => {
+    const symbolNotes = current ? getChordDisplayNotes(current.chord) : []
+    const flashingVoicingNotes = new Set(
+      (v || [])
+        .filter((entry) => {
+          const fret = typeof entry.fret === "number" ? entry.fret : 0
+          return flashingNoteIds.has(audioNoteId(entry.string, fret))
+        })
+        .map((entry) => entry.note)
+    )
+
+    return symbolNotes.length
+      ? symbolNotes.map((item, index) => ({
+        note: item.note,
+        role: item.role,
+        id: `${item.note}:${item.role}:${index}`,
+        isFlashing: flashingVoicingNotes.has(item.note)
+      }))
+      : []
+  }, [current, v, flashingNoteIds])
+  const chordNotes = useMemo(() => {
+    return new Set(chordToneNotes.map(item => item.note))
+  }, [chordToneNotes])
   const scaleNotes = useMemo(() => {
     return new Set(buildScaleFromMode(key, mode))
   }, [key, mode])
+
+  useEffect(() => {
+    progressionLoopingRef.current = isProgressionLooping
+  }, [isProgressionLooping])
+
+  useEffect(() => {
+    progressionRef.current = progression
+  }, [progression])
+
+  useEffect(() => {
+    audioSpeedRef.current = audioSpeed
+  }, [audioSpeed])
+
+  useEffect(() => {
+    audioRepeatsRef.current = audioRepeats
+  }, [audioRepeats])
+
+  useEffect(() => {
+    return () => {
+      if(audioTimeoutRef.current) clearTimeout(audioTimeoutRef.current)
+      if(progressionTimeoutRef.current) clearTimeout(progressionTimeoutRef.current)
+      noteFlashTimeoutsRef.current.forEach(clearTimeout)
+      const engine = audioEngineRef.current
+      if(!engine) return
+
+      engine.sampler.dispose()
+      engine.filter.dispose()
+      engine.delay.dispose()
+      engine.reverb.dispose()
+      engine.gain.dispose()
+    }
+  }, [])
 
   return (
     <main className="min-h-screen bg-[var(--background)] text-[var(--foreground)] p-3 space-y-3">
 
       <div className="grid grid-cols-1 xl:grid-cols-[540px_minmax(0,1fr)] gap-3">
         <div className="surface-panel flex h-full flex-col gap-4 p-4">
-          <div className="surface-inset flex flex-1 flex-col justify-center p-3">
-            <div className="label-text text-sm font-extrabold mb-2">Key</div>
+          <div className="surface-inset flex flex-1 flex-col p-4">
+            <div className="mb-3 flex items-center">
+              <span className="label-text text-base font-black tracking-wide">Key</span>
+            </div>
             <div className="grid grid-cols-6 gap-2">
               {KEY_OPTIONS.map((option) => (
                 <button
@@ -341,6 +839,7 @@ export default function Home() {
                   key={option}
                   onClick={() => setKey(option)}
                   aria-pressed={key === option}
+                  title={`Set key to ${option}`}
                   className={`min-h-10 rounded-2xl border px-3 py-2 text-sm font-black transition ${
                     key === option
                       ? "choice-button-active"
@@ -353,8 +852,10 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="surface-inset flex flex-1 flex-col justify-center p-3">
-            <div className="label-text text-sm font-extrabold mb-2">Mode</div>
+          <div className="surface-inset flex flex-1 flex-col p-4">
+            <div className="mb-3 flex items-center">
+              <span className="label-text text-base font-black tracking-wide">Mode</span>
+            </div>
             <div className="grid grid-cols-8 gap-2">
               {MODE_OPTIONS.map((option, i) => (
                 <button
@@ -362,6 +863,7 @@ export default function Home() {
                   key={option.value}
                   onClick={() => setMode(option.value)}
                   aria-pressed={mode === option.value}
+                  title={`Set mode to ${option.label}`}
                   className={`${i === 4 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl border px-3 py-2 text-sm font-black transition ${
                     mode === option.value
                       ? "choice-button-active"
@@ -380,12 +882,14 @@ export default function Home() {
             <span>Progression</span>
           </div>
 
-          <div className="progression-scroll max-w-full overflow-x-auto overflow-y-hidden pl-2 pr-5 pt-6 pb-4">
-          <div className="flex h-[104px] w-max items-start gap-3 pr-3">
+          <div className="progression-scroll max-w-full overflow-x-auto overflow-y-hidden pl-7 pr-9 pt-8 pb-6">
+          <div className="flex h-[118px] w-max items-start gap-4 pr-4">
             {progression.map((c, i) => {
   const degree = getDegree(c.chord, key)
+  const chordLabel = chordDisplayName(c.chord)
   const canMoveLeft = i > 0
   const canMoveRight = i < progression.length - 1
+  const isPlayingChord = isProgressionPlaying && i === progressionPlayIndex
 
   return (
     <div key={i} className="flex flex-col items-center gap-2">
@@ -393,12 +897,13 @@ export default function Home() {
       <div className="relative">
         <button
           type="button"
-          className={`relative px-6 py-3 text-xl font-extrabold rounded-full border-2 border-[var(--ink)] shadow cursor-pointer flex items-center gap-3 transition ${chordColor(c.chord, key)} ${i === selectedIndex ? "ring-4 ring-[var(--ink)]/70" : ""}`}
+          className={`relative px-6 py-3 text-xl font-extrabold rounded-full border-2 border-[var(--ink)] shadow cursor-pointer flex items-center gap-3 transition ${chordColor(c.chord, key)} ${i === selectedIndex ? "ring-4 ring-[var(--ink)]/70" : ""} ${isPlayingChord ? "scale-110 brightness-125 ring-4 ring-[#fff8ec] shadow-[0_0_24px_rgba(255,248,236,0.95)]" : ""}`}
           onClick={() => selectChord(i)}
           aria-pressed={i === selectedIndex}
-          aria-label={`Select ${c.chord}`}
+          aria-label={`Select ${chordLabel}`}
+          title={i === selectedIndex ? `Unselect ${chordLabel}` : `Select ${chordLabel}`}
         >
-          <span className="text-xl tracking-tight">{c.chord}</span>
+          <span className="text-xl tracking-tight">{chordLabel}</span>
 
           {degree && (
             <span className="text-base font-extrabold bg-[var(--ink)] text-[#fff8ec] rounded-full px-4 py-1 shadow-sm">
@@ -413,7 +918,8 @@ export default function Home() {
             e.stopPropagation()
             removeChord(i)
           }}
-          aria-label={`Remove ${c.chord}`}
+          aria-label={`Remove ${chordLabel}`}
+          title={`Remove ${chordLabel}`}
           className="absolute -top-2 -right-2 w-7 h-7 text-sm bg-[var(--ink)] text-[#fff8ec] rounded-full flex items-center justify-center shadow hover:brightness-110"
         >
           {"\u00d7"}
@@ -425,7 +931,8 @@ export default function Home() {
           type="button"
           onClick={() => moveChord(i, -1)}
           disabled={!canMoveLeft}
-          aria-label={`Move ${c.chord} left`}
+          aria-label={`Move ${chordLabel} left`}
+          title={`Move ${chordLabel} left`}
           className={`control-button text-sm font-bold px-3 py-2 rounded-full ${canMoveLeft ? "" : "cursor-not-allowed opacity-45"}`}
         >
           {"\u2190"}
@@ -435,7 +942,8 @@ export default function Home() {
           type="button"
           onClick={() => moveChord(i, 1)}
           disabled={!canMoveRight}
-          aria-label={`Move ${c.chord} right`}
+          aria-label={`Move ${chordLabel} right`}
+          title={`Move ${chordLabel} right`}
           className={`control-button text-sm font-bold px-3 py-2 rounded-full ${canMoveRight ? "" : "cursor-not-allowed opacity-45"}`}
         >
           {"\u2192"}
@@ -455,11 +963,13 @@ export default function Home() {
                 <input
                   value={inputChord}
                   onChange={(e) => updateChord(e.target.value)}
+                  onBlur={normalizeCurrentInputChord}
                   onKeyDown={(e) => {
                     if(e.key === "Enter") addChord()
                   }}
                   placeholder="Type chord . . ."
                   aria-label="Chord name"
+                  title="Type a chord name"
                   className="h-11 w-64 rounded-2xl border border-[var(--line-soft)] bg-[var(--control-soft)]/65 px-4 text-[15px] font-bold text-[var(--ink)] shadow-inner outline-none transition placeholder:text-[var(--ink-soft)]/55 focus:border-[var(--control)] focus:bg-[var(--control-soft)]/80 focus:placeholder:text-transparent focus:ring-4 focus:ring-[var(--control)]/20"
                 />
                 <button
@@ -467,6 +977,7 @@ export default function Home() {
                   onClick={addChord}
                   disabled={!canAddChord}
                   aria-label="Add chord"
+                  title="Add chord to progression"
                   className={`control-button h-11 w-14 rounded-2xl text-xl font-black ${canAddChord ? "" : "cursor-not-allowed opacity-45"}`}
                 >
                   +
@@ -482,6 +993,7 @@ export default function Home() {
                   onClick={() => stepResolveWithin(-1)}
                   disabled={!canResolveBackward}
                   aria-label="Resolve sooner"
+                  title="Resolve sooner"
                   className={`control-button h-11 w-11 rounded-full ${canResolveBackward ? "" : "cursor-not-allowed opacity-45"}`}
                 >
                   {"\u2190"}
@@ -492,10 +1004,83 @@ export default function Home() {
                   onClick={() => stepResolveWithin(1)}
                   disabled={!canResolveForward}
                   aria-label="Resolve later"
+                  title="Resolve later"
                   className={`control-button h-11 w-11 rounded-full ${canResolveForward ? "" : "cursor-not-allowed opacity-45"}`}
                 >
                   {"\u2192"}
                 </button>
+              </div>
+            </div>
+
+            <div>
+              <div className="label-text text-sm font-extrabold mb-2">Audio</div>
+              <div className="flex h-12 items-center gap-2 rounded-2xl bg-[var(--surface-soft)]/70 p-1 shadow-inner">
+                <button
+                  type="button"
+                  onClick={toggleProgressionAudio}
+                  disabled={!canPlayProgression}
+                  aria-label={isProgressionPlaying ? "Pause progression" : "Play progression"}
+                  title={isProgressionPlaying ? "Pause progression" : "Play progression"}
+                  className={`flex h-10 w-12 items-center justify-center rounded-xl text-sm font-black shadow-sm ${
+                    isProgressionPlaying
+                      ? "bg-[var(--ink)] text-[#fff8ec]"
+                      : "control-button"
+                  } ${canPlayProgression ? "" : "cursor-not-allowed opacity-45"}`}
+                  >
+                  <PlayMark paused={isProgressionPlaying} />
+                </button>
+                <button
+                  type="button"
+                  onClick={toggleProgressionLoop}
+                  aria-pressed={isProgressionLooping}
+                  aria-label={isProgressionLooping ? "Disable loop" : "Enable loop"}
+                  title={isProgressionLooping ? "Loop on" : "Loop off"}
+                  className={`flex h-10 w-12 items-center justify-center rounded-xl text-xl font-black leading-none shadow-sm ${
+                    isProgressionLooping
+                      ? "bg-[var(--ink)] text-[#fff8ec]"
+                      : "control-button"
+                  }`}
+                >
+                  <span aria-hidden="true">{"\u21bb"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={cycleAudioSpeed}
+                  className="control-button flex h-10 w-12 items-center justify-center rounded-xl"
+                  aria-label="Change playback speed"
+                  title={`Speed: ${audioSpeed}`}
+                >
+                  <span className="flex h-6 w-7 items-end justify-center gap-1" aria-hidden="true">
+                    <span className={`w-1.5 rounded-full bg-current ${audioSpeed === "tight" ? "h-2 opacity-100" : "h-2 opacity-35"}`} />
+                    <span className={`w-1.5 rounded-full bg-current ${audioSpeed === "easy" ? "h-4 opacity-100" : "h-4 opacity-50"}`} />
+                    <span className={`w-1.5 rounded-full bg-current ${audioSpeed === "slow" ? "h-6 opacity-100" : "h-6 opacity-65"}`} />
+                  </span>
+                </button>
+                <div className="ml-1 flex h-10 items-center gap-1 rounded-xl bg-[var(--control-soft)]/70 px-1 shadow-sm">
+                  <button
+                    type="button"
+                    onClick={() => stepAudioRepeats(-1)}
+                    disabled={!canRepeatLess}
+                    aria-label="Play each chord fewer times"
+                    title="Play each chord fewer times"
+                    className={`flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--control)] text-lg font-black text-[var(--ink)] shadow-sm ${canRepeatLess ? "" : "cursor-not-allowed opacity-35"}`}
+                  >
+                    {"\u2190"}
+                  </button>
+                  <span className="flex h-8 min-w-10 items-center justify-center rounded-lg bg-[var(--ink)] px-2 text-sm font-black text-[#fff8ec]">
+                    x{audioRepeats}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => stepAudioRepeats(1)}
+                    disabled={!canRepeatMore}
+                    aria-label="Play each chord more times"
+                    title="Play each chord more times"
+                    className={`flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--control)] text-lg font-black text-[var(--ink)] shadow-sm ${canRepeatMore ? "" : "cursor-not-allowed opacity-35"}`}
+                  >
+                    {"\u2192"}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -510,7 +1095,7 @@ export default function Home() {
                   const degree = getDegree(s, key)
 
                   return (
-                    <button type="button" key={s} onClick={() => addSuggestion(s)} aria-label={`Add ${s}`} className={`${chordColor(s, key)} ${i === 4 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-2 py-2 text-[15px] font-black shadow-sm border border-[var(--ink)]/15 hover:brightness-95 flex items-center justify-center gap-1.5 min-w-0 transition`}>
+                    <button type="button" key={s} onClick={() => addSuggestion(s)} aria-label={`Add ${s}`} title={`Add ${chordDisplayName(s)} to progression`} className={`${chordColor(s, key)} ${i === 4 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-2 py-2 text-[15px] font-black shadow-sm border border-[var(--ink)]/15 hover:brightness-95 flex items-center justify-center gap-1.5 min-w-0 transition`}>
                       <span className="truncate">{s}</span>
                       {degree && (
                         <span className="shrink-0 rounded-full bg-[var(--ink)] px-2 py-1 text-[11px] font-black leading-none text-[#fff8ec]">
@@ -530,7 +1115,7 @@ export default function Home() {
                   const degree = getDegree(s, key)
 
                   return (
-                    <button type="button" key={s} onClick={() => addSuggestion(s)} aria-label={`Add ${s}`} className={`${chordColor(s, key)} ${i === 3 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-3 py-2 text-base font-black shadow-sm border border-[var(--ink)]/15 hover:brightness-95 flex items-center justify-center gap-2 min-w-0 transition`}>
+                    <button type="button" key={s} onClick={() => addSuggestion(s)} aria-label={`Add ${s}`} title={`Add ${chordDisplayName(s)} to progression`} className={`${chordColor(s, key)} ${i === 3 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-3 py-2 text-base font-black shadow-sm border border-[var(--ink)]/15 hover:brightness-95 flex items-center justify-center gap-2 min-w-0 transition`}>
                       <span className="truncate">{s}</span>
                       {degree && (
                         <span className="shrink-0 rounded-full bg-[var(--ink)] px-2 py-1 text-[11px] font-black leading-none text-[#fff8ec]">
@@ -550,7 +1135,7 @@ export default function Home() {
                   const degree = getDegree(s, key)
 
                   return (
-                    <button type="button" key={s} onClick={() => addSuggestion(s)} aria-label={`Add ${s}`} className={`${chordColor(s, key)} ${i === 3 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-3 py-2 text-base font-black shadow-sm border border-[var(--ink)]/15 hover:brightness-95 flex items-center justify-center gap-2 min-w-0 transition`}>
+                    <button type="button" key={s} onClick={() => addSuggestion(s)} aria-label={`Add ${s}`} title={`Add ${chordDisplayName(s)} to progression`} className={`${chordColor(s, key)} ${i === 3 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-3 py-2 text-base font-black shadow-sm border border-[var(--ink)]/15 hover:brightness-95 flex items-center justify-center gap-2 min-w-0 transition`}>
                       <span className="truncate">{s}</span>
                       {degree && (
                         <span className="shrink-0 rounded-full bg-[var(--ink)] px-2 py-1 text-[11px] font-black leading-none text-[#fff8ec]">
@@ -578,105 +1163,170 @@ export default function Home() {
 
           {current && (
             <>
-              <div className={`text-3xl font-extrabold mb-3 px-5 py-2 rounded-2xl shadow-sm ${chordColor(current.chord, key)}`}>{current.chord}</div>
+              <div className={`text-3xl font-extrabold mb-3 px-5 py-2 rounded-2xl shadow-sm ${chordColor(current.chord, key)}`}>{chordDisplayName(current.chord)}</div>
 
-              <div className="flex flex-wrap items-end gap-3 mb-3 text-base font-bold">
+              <div className="mb-3 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_220px] xl:items-start">
                 <div>
-                  <div className="label-text text-sm font-extrabold mb-2">Voicing</div>
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => updateVoicingIndex(voicingIndex - 1)}
-                      disabled={!canStepVoicingBackward}
-                      aria-label="Previous voicing"
-                      className={`control-button px-4 py-2 rounded-full ${canStepVoicingBackward ? "" : "cursor-not-allowed opacity-45"}`}
-                    >
-                      {"\u2190"}
-                    </button>
-                    <span className="px-4 py-2 rounded-full bg-[var(--control-soft)] text-[var(--ink)] shadow-sm">{voicingIndex + 1}/{voicings.length}</span>
-                    <button
-                      type="button"
-                      onClick={() => updateVoicingIndex(voicingIndex + 1)}
-                      disabled={!canStepVoicingForward}
-                      aria-label="Next voicing"
-                      className={`control-button px-4 py-2 rounded-full ${canStepVoicingForward ? "" : "cursor-not-allowed opacity-45"}`}
-                    >
-                      {"\u2192"}
-                    </button>
+              <div className="inline-flex max-w-full flex-col gap-3">
+                <div className="flex flex-wrap items-end gap-3 text-base font-bold">
+                  <div>
+                    <div className="label-text text-sm font-extrabold mb-2">Voicing</div>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => updateVoicingIndex(voicingIndex - 1)}
+                        disabled={!canStepVoicingBackward}
+                        aria-label="Previous voicing"
+                        title="Previous voicing"
+                        className={`control-button px-4 py-2 rounded-full ${canStepVoicingBackward ? "" : "cursor-not-allowed opacity-45"}`}
+                      >
+                        {"\u2190"}
+                      </button>
+                      <span className="px-4 py-2 rounded-full bg-[var(--control-soft)] text-[var(--ink)] shadow-sm">{voicingIndex + 1}/{voicings.length}</span>
+                      <button
+                        type="button"
+                        onClick={() => updateVoicingIndex(voicingIndex + 1)}
+                        disabled={!canStepVoicingForward}
+                        aria-label="Next voicing"
+                        title="Next voicing"
+                        className={`control-button px-4 py-2 rounded-full ${canStepVoicingForward ? "" : "cursor-not-allowed opacity-45"}`}
+                      >
+                        {"\u2192"}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="label-text text-sm font-extrabold mb-2">Strings</div>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => stepStrings(-1)}
+                        disabled={!canStepStringsBackward}
+                        aria-label="Use fewer strings"
+                        title="Use fewer strings"
+                        className={`control-button px-4 py-2 rounded-full ${canStepStringsBackward ? "" : "cursor-not-allowed opacity-45"}`}
+                      >
+                        {"\u2190"}
+                      </button>
+                      <span className="px-4 py-2 rounded-full bg-[var(--control-soft)] text-[var(--ink)] shadow-sm">{inputStrings}</span>
+                      <button
+                        type="button"
+                        onClick={() => stepStrings(1)}
+                        disabled={!canStepStringsForward}
+                        aria-label="Use more strings"
+                        title="Use more strings"
+                        className={`control-button px-4 py-2 rounded-full ${canStepStringsForward ? "" : "cursor-not-allowed opacity-45"}`}
+                      >
+                        {"\u2192"}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="label-text text-sm font-extrabold mb-2">Notes</div>
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setShowAllNotes(!showAllNotes)}
+                        aria-pressed={showAllNotes}
+                        title={showAllNotes ? "Hide all notes" : "Show all notes"}
+                        className={`px-5 py-2 rounded-full text-base font-extrabold shadow-sm ${
+                          showAllNotes
+                            ? "bg-[var(--ink)] text-[#fff8ec]"
+                            : "control-button"
+                        }`}
+                      >
+                        {showAllNotes ? "Hide all notes" : "Show all notes"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHighlightScale(!highlightScale)}
+                        aria-pressed={highlightScale}
+                        title={highlightScale ? "Hide scale notes" : "Highlight scale notes"}
+                        className={`px-5 py-2 rounded-full text-base font-extrabold shadow-sm ${
+                          highlightScale
+                            ? "bg-[var(--ink)] text-[#fff8ec]"
+                            : "control-button"
+                        }`}
+                      >
+                        {highlightScale ? "Hide scale" : "Highlight scale"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHighlightChordNotes(!highlightChordNotes)}
+                        aria-pressed={highlightChordNotes}
+                        title={highlightChordNotes ? "Hide chord notes" : "Highlight chord notes"}
+                        className={`px-5 py-2 rounded-full text-base font-extrabold shadow-sm ${
+                          highlightChordNotes
+                            ? "bg-[var(--ink)] text-[#fff8ec]"
+                            : "control-button"
+                        }`}
+                      >
+                        {highlightChordNotes ? "Hide chord notes" : "Highlight chord notes"}
+                      </button>
+                    </div>
                   </div>
                 </div>
 
-                <div>
-                  <div className="label-text text-sm font-extrabold mb-2">Strings</div>
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => stepStrings(-1)}
-                      disabled={!canStepStringsBackward}
-                      aria-label="Use fewer strings"
-                      className={`control-button px-4 py-2 rounded-full ${canStepStringsBackward ? "" : "cursor-not-allowed opacity-45"}`}
-                    >
-                      {"\u2190"}
-                    </button>
-                    <span className="px-4 py-2 rounded-full bg-[var(--control-soft)] text-[var(--ink)] shadow-sm">{inputStrings}</span>
-                    <button
-                      type="button"
-                      onClick={() => stepStrings(1)}
-                      disabled={!canStepStringsForward}
-                      aria-label="Use more strings"
-                      className={`control-button px-4 py-2 rounded-full ${canStepStringsForward ? "" : "cursor-not-allowed opacity-45"}`}
-                    >
-                      {"\u2192"}
-                    </button>
-                  </div>
-                </div>
+                <div className="group relative flex w-full items-center gap-2 rounded-[32px] bg-[var(--surface-soft)]/50 p-2 shadow-inner" title="Bass to high">
+                  {chordToneNotes.flatMap((item, i) => {
+                    const items = [
+                      <div
+                        key={item.id}
+                        className={`relative z-10 flex h-[68px] w-[68px] shrink-0 items-center justify-center rounded-full text-2xl font-black leading-none text-[var(--ink)] shadow-[0_4px_10px_rgba(47,33,24,0.18)] transition duration-150 ${noteColor(item.note, key)} ${item.isFlashing ? "scale-125 brightness-150 ring-4 ring-[#fff8ec] shadow-[0_0_24px_rgba(255,248,236,0.95)]" : ""}`}
+                        title={`${item.note}: ${item.role}`}
+                      >
+                        <span>{item.note}</span>
+                        <span className="absolute bottom-1 right-1 flex min-w-6 items-center justify-center rounded-md border border-[var(--line)]/35 bg-[#fff8ec]/90 px-1 py-0.5 text-[10px] font-black leading-none text-[var(--ink-soft)] shadow-sm">
+                          {item.role}
+                        </span>
+                      </div>
+                    ]
 
-                <div>
-                  <div className="label-text text-sm font-extrabold mb-2">Notes</div>
-                  <div className="flex flex-wrap gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setShowAllNotes(!showAllNotes)}
-                      aria-pressed={showAllNotes}
-                      className={`px-5 py-2 rounded-full text-base font-extrabold shadow-sm ${
-                        showAllNotes
-                          ? "bg-[var(--ink)] text-[#fff8ec]"
-                          : "control-button"
-                      }`}
-                    >
-                      {showAllNotes ? "Hide all notes" : "Show all notes"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setHighlightScale(!highlightScale)}
-                      aria-pressed={highlightScale}
-                      className={`px-5 py-2 rounded-full text-base font-extrabold shadow-sm ${
-                        highlightScale
-                          ? "bg-[var(--ink)] text-[#fff8ec]"
-                          : "control-button"
-                      }`}
-                    >
-                      {highlightScale ? "Hide scale" : "Highlight scale"}
-                    </button>
-                  </div>
+                    if(i < chordToneNotes.length - 1) {
+                      items.push(
+                        <div
+                          key={`${item.id}-arrow`}
+                          className="relative flex min-w-10 flex-1 items-center justify-center"
+                          aria-hidden="true"
+                        >
+                          <div
+                            className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full"
+                            style={{ background: "color-mix(in srgb, var(--ink) 18%, transparent)" }}
+                          />
+                          <span className="relative z-10 flex h-8 w-8 items-center justify-center">
+                            <span
+                              className="block h-3.5 w-3.5 rotate-45 border-r-[4px] border-t-[4px]"
+                              style={{ borderColor: "color-mix(in srgb, var(--ink) 18%, transparent)" }}
+                            />
+                          </span>
+                        </div>
+                      )
+                    }
+
+                    return items
+                  })}
                 </div>
               </div>
+                </div>
 
-              <div className="flex gap-3 flex-wrap">
-                {STRINGS.map((s, i) => {
-                  const f = v?.find(x => x.string === i)
-                  return (
-                    <div key={i} className={`w-[88px] h-[88px] rounded-full p-2 flex flex-col items-center justify-center shadow-[0_2px_7px_rgba(47,33,24,0.18)] ${f ? noteColor(f.note, key) : "bg-[var(--surface-muted)]"}`}>
-                      <div className="text-xs font-extrabold tracking-wide text-[var(--ink)] mb-1.5">{s} ({STRING_NO[i]})</div>
-                      <div className={`min-w-[54px] rounded-full px-3 py-1 text-xs font-extrabold leading-none text-center shadow-sm ${f ? "bg-[#fffaf0]/90 text-[var(--ink)]" : "bg-[var(--muted-badge)] text-[var(--muted-badge-text)]"}`}>
-                        {f ? `Fret ${f.fret}` : "x"}
-                      </div>
-                      <div className={`mt-2 min-w-[28px] rounded-full px-3 py-1 text-xs font-bold leading-none text-center shadow-sm ${f ? "bg-[var(--ink)]/15 text-[var(--ink)]" : "bg-[var(--ink)]/10 text-[var(--ink-soft)]"}`}>
-                        {f ? f.note : "\u2014"}
-                      </div>
-                    </div>
-                  )
-                })}
+                <div className="flex h-full min-h-[132px] items-center justify-center">
+                  <button
+                    type="button"
+                    onClick={() => void playVoicingAudio("strum")}
+                    disabled={audioNotes.length === 0}
+                    aria-label="Play selected voicing"
+                    title="Play selected voicing"
+                    className={`flex h-24 w-24 items-center justify-center rounded-[24px] text-[var(--ink)] shadow-[0_4px_10px_rgba(47,33,24,0.18)] transition ${
+                      isAudioPlaying
+                        ? "bg-[var(--control)] text-[var(--ink)] brightness-95"
+                        : "bg-[var(--control)] text-[var(--ink)] hover:brightness-95"
+                    } ${audioNotes.length > 0 ? "" : "cursor-not-allowed opacity-45"}`}
+                  >
+                    <PlayMark paused={isAudioPlaying} large />
+                  </button>
+                </div>
               </div>
 
               <div className="mt-4 rounded-[24px] bg-[var(--fretboard-deep)] p-2 overflow-x-auto shadow-inner">
@@ -730,8 +1380,10 @@ export default function Home() {
                           const note = getFretNote(s, fret)
                           const isActive = active?.fret === fret
                           const isScaleNote = scaleNotes.has(note)
-                          const showNote = showAllNotes || isActive || (highlightScale && isScaleNote)
+                          const isChordNote = chordNotes.has(note)
+                          const showNote = showAllNotes || isActive || (highlightScale && isScaleNote) || (highlightChordNotes && isChordNote)
                           const noteMarkerColor = noteColor(note, key)
+                          const isFlashing = flashingNoteIds.has(audioNoteId(stringIndex, fret))
 
                           return (
                             <div
@@ -750,17 +1402,19 @@ export default function Home() {
 
                               {showNote && (
                                 <div
-                                  className={`absolute z-10 rounded-full shadow-md flex items-center justify-center font-extrabold leading-none text-[var(--ink)] ${noteMarkerColor} ${
+                                  className={`absolute z-10 rounded-full shadow-md flex items-center justify-center font-extrabold leading-none text-[var(--ink)] transition duration-150 ${noteMarkerColor} ${
                                     isActive
                                       ? "w-9 h-9 text-base border-[3px] border-[#fffaf0]"
                                       : `w-7 h-7 text-xs ${
-                                          highlightScale && isScaleNote
+                                          highlightChordNotes && isChordNote
+                                            ? "border-[3px] border-[#fffaf0] ring-2 ring-[#fffaf0]/75"
+                                            : highlightScale && isScaleNote
                                             ? "border-[3px] border-[#fffaf0] ring-2 ring-[var(--ink)]/45"
-                                            : highlightScale
+                                            : highlightScale || highlightChordNotes
                                               ? "opacity-35"
                                               : "opacity-85"
                                         }`
-                                  }`}
+                                  } ${isFlashing ? "scale-150 brightness-150 ring-4 ring-[#fff8ec] shadow-[0_0_28px_rgba(255,248,236,0.95)]" : ""}`}
                                 >
                                   {note}
                                 </div>
