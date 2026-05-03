@@ -1,8 +1,22 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #d7cfbd;
+  --foreground: #21170f;
+  --surface: #e6d6bd;
+  --surface-soft: #d9c7aa;
+  --surface-muted: #b9aa92;
+  --line: #a9875c;
+  --line-soft: #b99a70;
+  --ink: #2f2118;
+  --ink-soft: #65472d;
+  --control: #b4864c;
+  --control-soft: #cdb58b;
+  --muted-badge: #f0dfc0;
+  --muted-badge-text: #5d432b;
+  --fretboard: #4c3b27;
+  --fretboard-deep: #302419;
+  --fretboard-line: #987144;
 }
 
 @theme inline {
@@ -12,21 +26,54 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
 
+.surface-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  box-shadow: 0 10px 24px rgba(55, 37, 22, 0.10);
+}
+
+.surface-inset {
+  background: color-mix(in srgb, var(--surface-soft) 92%, white);
+  border: 1px solid color-mix(in srgb, var(--line) 72%, white);
+  border-radius: 18px;
+  box-shadow: inset 0 1px 8px rgba(55, 37, 22, 0.07);
+}
+
+.label-text {
+  color: var(--ink-soft);
+}
+
+.control-button {
+  background: var(--control);
+  color: var(--ink);
+  box-shadow: 0 2px 5px rgba(64, 45, 28, 0.12);
+}
+
+.control-button:hover:not(:disabled) {
+  filter: brightness(0.97);
+}
+
+.choice-button {
+  background: var(--control-soft);
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--ink) 18%, transparent);
+  box-shadow: 0 2px 5px rgba(64, 45, 28, 0.12);
+}
+
+.choice-button-active {
+  background: var(--ink);
+  color: #fff8ec;
+}
+
 .progression-scroll {
-  scrollbar-color: #c7aa7c transparent;
+  scrollbar-color: var(--control) transparent;
   scrollbar-width: thin;
   overscroll-behavior-x: contain;
   scrollbar-gutter: stable;
@@ -42,11 +89,11 @@ body {
 }
 
 .progression-scroll::-webkit-scrollbar-thumb {
-  background: #c7aa7c;
+  background: var(--control);
   border-radius: 999px;
-  border: 3px solid #f4eadb;
+  border: 3px solid var(--surface);
 }
 
 .progression-scroll::-webkit-scrollbar-thumb:hover {
-  background: #b9966a;
+  background: var(--line);
 }

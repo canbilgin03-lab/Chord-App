@@ -63,11 +63,11 @@ function qualityDegreeSuffix(quality: Quality) {
     maj: "",
     m: "",
     "7": "7",
-    maj7: "Δ7",
+    maj7: "\u03947",
     m7: "7",
-    m7b5: "ø7",
-    dim: "°",
-    dim7: "°7",
+    m7b5: "\u00f87",
+    dim: "\u00b0",
+    dim7: "\u00b07",
     sus2: "sus2",
     sus4: "sus4",
     "7sus2": "7sus2",
@@ -90,16 +90,16 @@ function getDegree(chord:string, key:string){
 
   const MAP: Record<number, string> = {
     0:"I",
-    1:"♭II",
+    1:"\u266dII",
     2:"II",
-    3:"♭III",
+    3:"\u266dIII",
     4:"III",
     5:"IV",
-    6:"♯IV",
+    6:"\u266fIV",
     7:"V",
-    8:"♭VI",
+    8:"\u266dVI",
     9:"VI",
-    10:"♭VII",
+    10:"\u266dVII",
     11:"VII"
   }
 
@@ -108,18 +108,18 @@ function getDegree(chord:string, key:string){
 }
 
 const COLORS = [
-  "bg-[#e85d50]",
-  "bg-[#ee7d42]",
-  "bg-[#f0a23e]",
-  "bg-[#e8c84d]",
-  "bg-[#b9d957]",
-  "bg-[#76c86b]",
-  "bg-[#45bd88]",
-  "bg-[#3fb8b2]",
-  "bg-[#4a9fe0]",
-  "bg-[#7475d8]",
-  "bg-[#a66dd6]",
-  "bg-[#d767a5]"
+  "bg-[#c95e50]",
+  "bg-[#c87c45]",
+  "bg-[#c99443]",
+  "bg-[#b9a852]",
+  "bg-[#98ad5b]",
+  "bg-[#70aa65]",
+  "bg-[#519d78]",
+  "bg-[#459596]",
+  "bg-[#5685a8]",
+  "bg-[#6b73aa]",
+  "bg-[#8e6fa0]",
+  "bg-[#b76888]"
 ]
 
 function chordColor(chord:string, key:string){
@@ -202,6 +202,8 @@ export default function Home() {
     if (selectedIndex === idx) {
       setSelectedIndex(null)
       setInputChord("")
+      setVoicings([])
+      setVoicingIndex(0)
       return
     }
 
@@ -326,12 +328,12 @@ export default function Home() {
   }, [key, mode])
 
   return (
-    <main className="min-h-screen bg-[#eadcc8] text-[#21170f] p-3 space-y-3">
+    <main className="min-h-screen bg-[var(--background)] text-[var(--foreground)] p-3 space-y-3">
 
       <div className="grid grid-cols-1 xl:grid-cols-[540px_minmax(0,1fr)] gap-3">
-        <div className="bg-[#f4eadb] border-2 border-[#b9966a] rounded-[24px] p-4 shadow-[0_8px_20px_rgba(58,38,23,0.08)] flex h-full flex-col gap-4">
-          <div className="flex flex-1 flex-col justify-center rounded-[20px] border border-[#b9966a]/70 bg-[#eadcc8]/70 p-3 shadow-inner">
-            <div className="text-sm font-extrabold mb-2 text-[#6b4b2f]">Key</div>
+        <div className="surface-panel flex h-full flex-col gap-4 p-4">
+          <div className="surface-inset flex flex-1 flex-col justify-center p-3">
+            <div className="label-text text-sm font-extrabold mb-2">Key</div>
             <div className="grid grid-cols-6 gap-2">
               {KEY_OPTIONS.map((option) => (
                 <button
@@ -339,10 +341,10 @@ export default function Home() {
                   key={option}
                   onClick={() => setKey(option)}
                   aria-pressed={key === option}
-                  className={`min-h-10 rounded-2xl px-3 py-2 text-sm font-black shadow-sm border border-[#3a2617]/20 hover:brightness-95 ${
+                  className={`min-h-10 rounded-2xl border px-3 py-2 text-sm font-black transition ${
                     key === option
-                      ? "bg-[#3a2617] text-[#fff7eb]"
-                      : "bg-[#e1cfb2] text-[#24170f]"
+                      ? "choice-button-active"
+                      : "choice-button hover:brightness-95"
                   }`}
                 >
                   {option}
@@ -351,8 +353,8 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="flex flex-1 flex-col justify-center rounded-[20px] border border-[#b9966a]/70 bg-[#eadcc8]/70 p-3 shadow-inner">
-            <div className="text-sm font-extrabold mb-2 text-[#6b4b2f]">Mode</div>
+          <div className="surface-inset flex flex-1 flex-col justify-center p-3">
+            <div className="label-text text-sm font-extrabold mb-2">Mode</div>
             <div className="grid grid-cols-8 gap-2">
               {MODE_OPTIONS.map((option, i) => (
                 <button
@@ -360,10 +362,10 @@ export default function Home() {
                   key={option.value}
                   onClick={() => setMode(option.value)}
                   aria-pressed={mode === option.value}
-                  className={`${i === 4 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-3 py-2 text-sm font-black shadow-sm border border-[#3a2617]/20 hover:brightness-95 ${
+                  className={`${i === 4 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl border px-3 py-2 text-sm font-black transition ${
                     mode === option.value
-                      ? "bg-[#3a2617] text-[#fff7eb]"
-                      : "bg-[#e1cfb2] text-[#24170f]"
+                      ? "choice-button-active"
+                      : "choice-button hover:brightness-95"
                   }`}
                 >
                   {option.label}
@@ -373,8 +375,8 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="min-w-0 bg-[#f4eadb] border-2 border-[#b9966a] rounded-[24px] p-4 shadow-[0_8px_20px_rgba(58,38,23,0.08)] space-y-3">
-          <div className="flex justify-between text-sm font-extrabold text-[#6b4b2f]">
+        <div className="surface-panel min-w-0 space-y-3 p-4">
+          <div className="label-text flex justify-between text-sm font-extrabold">
             <span>Progression</span>
           </div>
 
@@ -391,7 +393,7 @@ export default function Home() {
       <div className="relative">
         <button
           type="button"
-          className={`relative px-6 py-3 text-xl font-extrabold rounded-full border-2 border-[#3a2617] shadow cursor-pointer flex items-center gap-3 ${chordColor(c.chord, key)} ${i === selectedIndex ? "ring-4 ring-[#3a2617]/75" : ""}`}
+          className={`relative px-6 py-3 text-xl font-extrabold rounded-full border-2 border-[var(--ink)] shadow cursor-pointer flex items-center gap-3 transition ${chordColor(c.chord, key)} ${i === selectedIndex ? "ring-4 ring-[var(--ink)]/70" : ""}`}
           onClick={() => selectChord(i)}
           aria-pressed={i === selectedIndex}
           aria-label={`Select ${c.chord}`}
@@ -399,7 +401,7 @@ export default function Home() {
           <span className="text-xl tracking-tight">{c.chord}</span>
 
           {degree && (
-            <span className="text-base font-extrabold bg-[#3a2617] text-[#fff7eb] rounded-full px-4 py-1 shadow-sm">
+            <span className="text-base font-extrabold bg-[var(--ink)] text-[#fff8ec] rounded-full px-4 py-1 shadow-sm">
               {degree}
             </span>
           )}
@@ -412,7 +414,7 @@ export default function Home() {
             removeChord(i)
           }}
           aria-label={`Remove ${c.chord}`}
-          className="absolute -top-2 -right-2 w-7 h-7 text-sm bg-[#3a2617] text-[#fff7eb] rounded-full flex items-center justify-center shadow hover:brightness-110"
+          className="absolute -top-2 -right-2 w-7 h-7 text-sm bg-[var(--ink)] text-[#fff8ec] rounded-full flex items-center justify-center shadow hover:brightness-110"
         >
           {"\u00d7"}
         </button>
@@ -424,7 +426,7 @@ export default function Home() {
           onClick={() => moveChord(i, -1)}
           disabled={!canMoveLeft}
           aria-label={`Move ${c.chord} left`}
-          className={`text-sm font-bold px-3 py-2 bg-[#c7aa7c] text-[#24170f] rounded-full shadow-sm ${canMoveLeft ? "hover:brightness-95" : "cursor-not-allowed opacity-45"}`}
+          className={`control-button text-sm font-bold px-3 py-2 rounded-full ${canMoveLeft ? "" : "cursor-not-allowed opacity-45"}`}
         >
           {"\u2190"}
         </button>
@@ -434,7 +436,7 @@ export default function Home() {
           onClick={() => moveChord(i, 1)}
           disabled={!canMoveRight}
           aria-label={`Move ${c.chord} right`}
-          className={`text-sm font-bold px-3 py-2 bg-[#c7aa7c] text-[#24170f] rounded-full shadow-sm ${canMoveRight ? "hover:brightness-95" : "cursor-not-allowed opacity-45"}`}
+          className={`control-button text-sm font-bold px-3 py-2 rounded-full ${canMoveRight ? "" : "cursor-not-allowed opacity-45"}`}
         >
           {"\u2192"}
         </button>
@@ -448,24 +450,24 @@ export default function Home() {
 
           <div className="flex flex-wrap items-end gap-4">
             <div>
-              <div className="text-sm font-extrabold mb-2 text-[#6b4b2f]">Add Chord</div>
-              <div className="flex max-w-[360px] gap-3">
+              <div className="label-text text-sm font-extrabold mb-2">Add Chord</div>
+              <div className="flex h-11 max-w-[360px] items-center gap-3">
                 <input
                   value={inputChord}
                   onChange={(e) => updateChord(e.target.value)}
                   onKeyDown={(e) => {
                     if(e.key === "Enter") addChord()
                   }}
-                  placeholder="Chord"
+                  placeholder="Type chord . . ."
                   aria-label="Chord name"
-                  className="w-64 px-4 py-3 text-base font-semibold border-2 rounded-2xl bg-[#fff7eb] border-[#b9966a] text-[#24170f]"
+                  className="h-11 w-64 rounded-2xl border border-[var(--line-soft)] bg-[var(--control-soft)]/65 px-4 text-[15px] font-bold text-[var(--ink)] shadow-inner outline-none transition placeholder:text-[var(--ink-soft)]/55 focus:border-[var(--control)] focus:bg-[var(--control-soft)]/80 focus:placeholder:text-transparent focus:ring-4 focus:ring-[var(--control)]/20"
                 />
                 <button
                   type="button"
                   onClick={addChord}
                   disabled={!canAddChord}
                   aria-label="Add chord"
-                  className={`h-11 w-14 rounded-2xl bg-[#c7aa7c] text-xl font-black text-[#24170f] shadow-sm ${canAddChord ? "hover:brightness-95" : "cursor-not-allowed opacity-45"}`}
+                  className={`control-button h-11 w-14 rounded-2xl text-xl font-black ${canAddChord ? "" : "cursor-not-allowed opacity-45"}`}
                 >
                   +
                 </button>
@@ -473,24 +475,24 @@ export default function Home() {
             </div>
 
             <div>
-              <div className="text-sm font-extrabold mb-2 text-[#6b4b2f]">Resolve In</div>
-              <div className="flex items-center gap-3">
+              <div className="label-text text-sm font-extrabold mb-2">Resolve In</div>
+              <div className="flex h-11 items-center gap-3">
                 <button
                   type="button"
                   onClick={() => stepResolveWithin(-1)}
                   disabled={!canResolveBackward}
                   aria-label="Resolve sooner"
-                  className={`px-4 py-2 rounded-full bg-[#c7aa7c] text-[#24170f] shadow-sm ${canResolveBackward ? "hover:brightness-95" : "cursor-not-allowed opacity-45"}`}
+                  className={`control-button h-11 w-11 rounded-full ${canResolveBackward ? "" : "cursor-not-allowed opacity-45"}`}
                 >
                   {"\u2190"}
                 </button>
-                <span className="min-w-12 px-4 py-2 rounded-full bg-[#e1cfb2] text-center font-black text-[#3a2617]">{resolveWithin}</span>
+                <span className="flex h-11 min-w-12 items-center justify-center rounded-full bg-[var(--control-soft)] px-4 text-center font-black text-[var(--ink)] shadow-sm">{resolveWithin}</span>
                 <button
                   type="button"
                   onClick={() => stepResolveWithin(1)}
                   disabled={!canResolveForward}
                   aria-label="Resolve later"
-                  className={`px-4 py-2 rounded-full bg-[#c7aa7c] text-[#24170f] shadow-sm ${canResolveForward ? "hover:brightness-95" : "cursor-not-allowed opacity-45"}`}
+                  className={`control-button h-11 w-11 rounded-full ${canResolveForward ? "" : "cursor-not-allowed opacity-45"}`}
                 >
                   {"\u2192"}
                 </button>
@@ -499,19 +501,19 @@ export default function Home() {
           </div>
 
           <div>
-          <div className="text-sm font-extrabold mb-2 text-[#6b4b2f]">Harmony Suggestions</div>
+          <div className="label-text text-sm font-extrabold mb-2">Harmony Suggestions</div>
           <div className="grid grid-cols-3 gap-3 pt-1">
-            <div className="rounded-[20px] border border-[#b9966a]/70 bg-[#eadcc8]/70 p-2.5 shadow-inner">
-              <div className="text-sm font-extrabold mb-2 text-[#6b4b2f]">Chords of the Key</div>
+            <div className="surface-inset p-2.5">
+              <div className="label-text text-sm font-extrabold mb-2">Chords of the Key</div>
               <div className="grid grid-cols-8 gap-2">
                 {keyChords.map((s: string, i: number) => {
                   const degree = getDegree(s, key)
 
                   return (
-                    <button type="button" key={s} onClick={() => addSuggestion(s)} aria-label={`Add ${s}`} className={`${chordColor(s, key)} ${i === 4 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-2 py-2 text-[15px] font-black shadow-sm border border-[#3a2617]/20 hover:brightness-95 flex items-center justify-center gap-1.5 min-w-0`}>
+                    <button type="button" key={s} onClick={() => addSuggestion(s)} aria-label={`Add ${s}`} className={`${chordColor(s, key)} ${i === 4 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-2 py-2 text-[15px] font-black shadow-sm border border-[var(--ink)]/15 hover:brightness-95 flex items-center justify-center gap-1.5 min-w-0 transition`}>
                       <span className="truncate">{s}</span>
                       {degree && (
-                        <span className="shrink-0 rounded-full bg-[#3a2617] px-2 py-1 text-[11px] font-black leading-none text-[#fff7eb]">
+                        <span className="shrink-0 rounded-full bg-[var(--ink)] px-2 py-1 text-[11px] font-black leading-none text-[#fff8ec]">
                           {degree}
                         </span>
                       )}
@@ -521,17 +523,17 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="rounded-[20px] border border-[#b9966a]/70 bg-[#eadcc8]/70 p-2.5 shadow-inner">
-              <div className="text-sm font-extrabold mb-2 text-[#6b4b2f]">Simple Suggestions</div>
+            <div className="surface-inset p-2.5">
+              <div className="label-text text-sm font-extrabold mb-2">Simple Suggestions</div>
               <div className="grid grid-cols-6 gap-3">
                 {progressionSuggestions.simple.map((s: string, i: number) => {
                   const degree = getDegree(s, key)
 
                   return (
-                    <button type="button" key={s} onClick={() => addSuggestion(s)} aria-label={`Add ${s}`} className={`${chordColor(s, key)} ${i === 3 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-3 py-2 text-base font-black shadow-sm border border-[#3a2617]/20 hover:brightness-95 flex items-center justify-center gap-2 min-w-0`}>
+                    <button type="button" key={s} onClick={() => addSuggestion(s)} aria-label={`Add ${s}`} className={`${chordColor(s, key)} ${i === 3 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-3 py-2 text-base font-black shadow-sm border border-[var(--ink)]/15 hover:brightness-95 flex items-center justify-center gap-2 min-w-0 transition`}>
                       <span className="truncate">{s}</span>
                       {degree && (
-                        <span className="shrink-0 rounded-full bg-[#3a2617] px-2 py-1 text-[11px] font-black leading-none text-[#fff7eb]">
+                        <span className="shrink-0 rounded-full bg-[var(--ink)] px-2 py-1 text-[11px] font-black leading-none text-[#fff8ec]">
                           {degree}
                         </span>
                       )}
@@ -541,17 +543,17 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="rounded-[20px] border border-[#b9966a]/70 bg-[#eadcc8]/70 p-2.5 shadow-inner">
-              <div className="text-sm font-extrabold mb-2 text-[#6b4b2f]">Complex Suggestions</div>
+            <div className="surface-inset p-2.5">
+              <div className="label-text text-sm font-extrabold mb-2">Complex Suggestions</div>
               <div className="grid grid-cols-6 gap-3">
                 {progressionSuggestions.complex.map((s: string, i: number) => {
                   const degree = getDegree(s, key)
 
                   return (
-                    <button type="button" key={s} onClick={() => addSuggestion(s)} aria-label={`Add ${s}`} className={`${chordColor(s, key)} ${i === 3 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-3 py-2 text-base font-black shadow-sm border border-[#3a2617]/20 hover:brightness-95 flex items-center justify-center gap-2 min-w-0`}>
+                    <button type="button" key={s} onClick={() => addSuggestion(s)} aria-label={`Add ${s}`} className={`${chordColor(s, key)} ${i === 3 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-3 py-2 text-base font-black shadow-sm border border-[var(--ink)]/15 hover:brightness-95 flex items-center justify-center gap-2 min-w-0 transition`}>
                       <span className="truncate">{s}</span>
                       {degree && (
-                        <span className="shrink-0 rounded-full bg-[#3a2617] px-2 py-1 text-[11px] font-black leading-none text-[#fff7eb]">
+                        <span className="shrink-0 rounded-full bg-[var(--ink)] px-2 py-1 text-[11px] font-black leading-none text-[#fff8ec]">
                           {degree}
                         </span>
                       )}
@@ -567,9 +569,9 @@ export default function Home() {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_300px] gap-3">
-        <div className="bg-[#f4eadb] border-2 border-[#b9966a] rounded-[24px] p-4 shadow-[0_8px_20px_rgba(58,38,23,0.08)]">
+        <div className="surface-panel p-4">
           {!current && (
-            <div className="rounded-[20px] border border-[#b9966a]/70 bg-[#eadcc8]/70 p-5 text-2xl font-extrabold text-[#3a2617] shadow-inner">
+            <div className="surface-inset p-5 text-2xl font-extrabold text-[var(--ink)]">
               No chord selected
             </div>
           )}
@@ -580,24 +582,24 @@ export default function Home() {
 
               <div className="flex flex-wrap items-end gap-3 mb-3 text-base font-bold">
                 <div>
-                  <div className="text-sm font-extrabold mb-2 text-[#6b4b2f]">Voicing</div>
+                  <div className="label-text text-sm font-extrabold mb-2">Voicing</div>
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
                       onClick={() => updateVoicingIndex(voicingIndex - 1)}
                       disabled={!canStepVoicingBackward}
                       aria-label="Previous voicing"
-                      className={`px-4 py-2 rounded-full bg-[#c7aa7c] text-[#24170f] shadow-sm ${canStepVoicingBackward ? "hover:brightness-95" : "cursor-not-allowed opacity-45"}`}
+                      className={`control-button px-4 py-2 rounded-full ${canStepVoicingBackward ? "" : "cursor-not-allowed opacity-45"}`}
                     >
                       {"\u2190"}
                     </button>
-                    <span className="px-4 py-2 rounded-full bg-[#e1cfb2] text-[#3a2617]">{voicingIndex + 1}/{voicings.length}</span>
+                    <span className="px-4 py-2 rounded-full bg-[var(--control-soft)] text-[var(--ink)] shadow-sm">{voicingIndex + 1}/{voicings.length}</span>
                     <button
                       type="button"
                       onClick={() => updateVoicingIndex(voicingIndex + 1)}
                       disabled={!canStepVoicingForward}
                       aria-label="Next voicing"
-                      className={`px-4 py-2 rounded-full bg-[#c7aa7c] text-[#24170f] shadow-sm ${canStepVoicingForward ? "hover:brightness-95" : "cursor-not-allowed opacity-45"}`}
+                      className={`control-button px-4 py-2 rounded-full ${canStepVoicingForward ? "" : "cursor-not-allowed opacity-45"}`}
                     >
                       {"\u2192"}
                     </button>
@@ -605,24 +607,24 @@ export default function Home() {
                 </div>
 
                 <div>
-                  <div className="text-sm font-extrabold mb-2 text-[#6b4b2f]">Strings</div>
+                  <div className="label-text text-sm font-extrabold mb-2">Strings</div>
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
                       onClick={() => stepStrings(-1)}
                       disabled={!canStepStringsBackward}
                       aria-label="Use fewer strings"
-                      className={`px-4 py-2 rounded-full bg-[#c7aa7c] text-[#24170f] shadow-sm ${canStepStringsBackward ? "hover:brightness-95" : "cursor-not-allowed opacity-45"}`}
+                      className={`control-button px-4 py-2 rounded-full ${canStepStringsBackward ? "" : "cursor-not-allowed opacity-45"}`}
                     >
                       {"\u2190"}
                     </button>
-                    <span className="px-4 py-2 rounded-full bg-[#e1cfb2] text-[#3a2617]">{inputStrings}</span>
+                    <span className="px-4 py-2 rounded-full bg-[var(--control-soft)] text-[var(--ink)] shadow-sm">{inputStrings}</span>
                     <button
                       type="button"
                       onClick={() => stepStrings(1)}
                       disabled={!canStepStringsForward}
                       aria-label="Use more strings"
-                      className={`px-4 py-2 rounded-full bg-[#c7aa7c] text-[#24170f] shadow-sm ${canStepStringsForward ? "hover:brightness-95" : "cursor-not-allowed opacity-45"}`}
+                      className={`control-button px-4 py-2 rounded-full ${canStepStringsForward ? "" : "cursor-not-allowed opacity-45"}`}
                     >
                       {"\u2192"}
                     </button>
@@ -630,7 +632,7 @@ export default function Home() {
                 </div>
 
                 <div>
-                  <div className="text-sm font-extrabold mb-2 text-[#6b4b2f]">Notes</div>
+                  <div className="label-text text-sm font-extrabold mb-2">Notes</div>
                   <div className="flex flex-wrap gap-3">
                     <button
                       type="button"
@@ -638,8 +640,8 @@ export default function Home() {
                       aria-pressed={showAllNotes}
                       className={`px-5 py-2 rounded-full text-base font-extrabold shadow-sm ${
                         showAllNotes
-                          ? "bg-[#3a2617] text-[#fff7eb]"
-                          : "bg-[#c7aa7c] text-[#24170f]"
+                          ? "bg-[var(--ink)] text-[#fff8ec]"
+                          : "control-button"
                       }`}
                     >
                       {showAllNotes ? "Hide all notes" : "Show all notes"}
@@ -650,8 +652,8 @@ export default function Home() {
                       aria-pressed={highlightScale}
                       className={`px-5 py-2 rounded-full text-base font-extrabold shadow-sm ${
                         highlightScale
-                          ? "bg-[#3a2617] text-[#fff7eb]"
-                          : "bg-[#c7aa7c] text-[#24170f]"
+                          ? "bg-[var(--ink)] text-[#fff8ec]"
+                          : "control-button"
                       }`}
                     >
                       {highlightScale ? "Hide scale" : "Highlight scale"}
@@ -664,29 +666,29 @@ export default function Home() {
                 {STRINGS.map((s, i) => {
                   const f = v?.find(x => x.string === i)
                   return (
-                    <div key={i} className={`w-[88px] h-[88px] border-[3px] border-[#3a2617] rounded-full p-2 flex flex-col items-center justify-center shadow ${f ? noteColor(f.note, key) : "bg-[#cfc2ae]"}`}>
-                      <div className="text-xs font-extrabold tracking-wide text-[#2a1c12] mb-1.5">{s} ({STRING_NO[i]})</div>
-                      <div className={`min-w-[54px] rounded-full px-3 py-1 text-xs font-extrabold leading-none text-center shadow-sm ${f ? "bg-[#fff7eb]/90 text-[#24170f]" : "bg-[#e1cfb2] text-[#6b4b2f]"}`}>
+                    <div key={i} className={`w-[88px] h-[88px] rounded-full p-2 flex flex-col items-center justify-center shadow-[0_2px_7px_rgba(47,33,24,0.18)] ${f ? noteColor(f.note, key) : "bg-[var(--surface-muted)]"}`}>
+                      <div className="text-xs font-extrabold tracking-wide text-[var(--ink)] mb-1.5">{s} ({STRING_NO[i]})</div>
+                      <div className={`min-w-[54px] rounded-full px-3 py-1 text-xs font-extrabold leading-none text-center shadow-sm ${f ? "bg-[#fffaf0]/90 text-[var(--ink)]" : "bg-[var(--muted-badge)] text-[var(--muted-badge-text)]"}`}>
                         {f ? `Fret ${f.fret}` : "x"}
                       </div>
-                      <div className={`mt-2 min-w-[28px] rounded-full px-3 py-1 text-xs font-bold leading-none text-center shadow-sm ${f ? "bg-[#3a2617]/15 text-[#111]" : "bg-[#3a2617]/10 text-[#6b4b2f]"}`}>
-                        {f ? f.note : "—"}
+                      <div className={`mt-2 min-w-[28px] rounded-full px-3 py-1 text-xs font-bold leading-none text-center shadow-sm ${f ? "bg-[var(--ink)]/15 text-[var(--ink)]" : "bg-[var(--ink)]/10 text-[var(--ink-soft)]"}`}>
+                        {f ? f.note : "\u2014"}
                       </div>
                     </div>
                   )
                 })}
               </div>
 
-              <div className="mt-4 rounded-[28px] bg-[#5a4b35] p-2 overflow-x-auto shadow-inner">
-                <div className="relative min-w-[980px] rounded-[22px] overflow-hidden bg-[#57462f]">
+              <div className="mt-4 rounded-[24px] bg-[var(--fretboard-deep)] p-2 overflow-x-auto shadow-inner">
+                <div className="relative min-w-[980px] rounded-[18px] overflow-hidden bg-[var(--fretboard)]">
                   <div
-                    className="absolute left-0 w-[88px] rounded-[22px] bg-[#caa46f]"
+                    className="absolute left-0 w-[88px] rounded-[18px] bg-[var(--control)]"
                     style={{
                       top: `${FRETBOARD_HEADER_HEIGHT + 6}px`,
                       height: 'calc(100% - 56px)'
                     }}
                   />
-                  <div className="absolute left-[96px] right-2 top-2 h-10 rounded-full bg-[#473522]" />
+                  <div className="absolute left-[96px] right-2 top-2 h-10 rounded-full bg-[var(--fretboard-deep)]" />
                   <div
                     className="relative grid items-end"
                     style={{ gridTemplateColumns: FRETBOARD_GRID }}
@@ -698,7 +700,7 @@ export default function Home() {
                         className="flex items-center justify-center"
                         style={{ height: FRETBOARD_HEADER_HEIGHT }}
                       >
-                        <span className="text-sm font-extrabold text-[#d5b582]">
+                        <span className="text-sm font-extrabold text-[#e4c590]">
                           {fret}
                         </span>
                       </div>
@@ -716,9 +718,9 @@ export default function Home() {
                         style={{ gridTemplateColumns: FRETBOARD_GRID }}
                       >
                         <div className="h-10 flex items-center px-3">
-                          <span className="flex items-center gap-2 text-sm font-extrabold text-[#2f2417]">
+                          <span className="flex items-center gap-2 text-sm font-extrabold text-[var(--ink)]">
                             <span>{s}</span>
-                            <span className="min-w-6 h-6 rounded-full bg-[#57462f] px-2 flex items-center justify-center text-xs text-[#f2dfbd]">
+                            <span className="min-w-6 h-6 rounded-full bg-[var(--fretboard)] px-2 flex items-center justify-center text-xs text-[#f7e5c7]">
                               {STRING_NO[stringIndex]}
                             </span>
                           </span>
@@ -734,13 +736,13 @@ export default function Home() {
                           return (
                             <div
                               key={fret}
-                              className="h-10 relative flex items-center justify-center bg-[#57462f]"
+                              className="h-10 relative flex items-center justify-center bg-[var(--fretboard)]"
                               style={{
-                                borderRight: '4px solid #ab8754',
+                                borderRight: '4px solid var(--fretboard-line)',
                               }}
                             >
                               <div
-                                className="absolute left-0 right-0 top-1/2 -translate-y-1/2 rounded-full bg-[#2d251b]"
+                                className="absolute left-0 right-0 top-1/2 -translate-y-1/2 rounded-full bg-[var(--fretboard-deep)]"
                                 style={{
                                   height: stringThickness(stringIndex),
                                 }}
@@ -748,12 +750,12 @@ export default function Home() {
 
                               {showNote && (
                                 <div
-                                  className={`absolute z-10 rounded-full shadow-md flex items-center justify-center font-extrabold leading-none text-[#24170f] ${noteMarkerColor} ${
+                                  className={`absolute z-10 rounded-full shadow-md flex items-center justify-center font-extrabold leading-none text-[var(--ink)] ${noteMarkerColor} ${
                                     isActive
-                                      ? "w-9 h-9 text-base border-[3px] border-[#fff7eb]"
+                                      ? "w-9 h-9 text-base border-[3px] border-[#fffaf0]"
                                       : `w-7 h-7 text-xs ${
                                           highlightScale && isScaleNote
-                                            ? "border-[3px] border-[#fff7eb] ring-2 ring-[#24170f]/45"
+                                            ? "border-[3px] border-[#fffaf0] ring-2 ring-[var(--ink)]/45"
                                             : highlightScale
                                               ? "opacity-35"
                                               : "opacity-85"
@@ -775,10 +777,15 @@ export default function Home() {
           )}
         </div>
 
-        <div className="bg-[#f4eadb] border-2 border-[#b9966a] rounded-[24px] p-4 shadow-[0_8px_20px_rgba(58,38,23,0.08)]">
-          <div className="mb-3 text-lg font-black text-[#3a2617]">Fretboard</div>
+        <div className="surface-panel p-4">
+          <div className="mb-3 text-lg font-black text-[var(--ink)]">Fretboard</div>
 
           <div className="flex flex-col gap-2.5">
+  {voicings.length === 0 && (
+    <div className="surface-inset p-4 text-sm font-extrabold text-[var(--ink-soft)]">
+      No voicing selected
+    </div>
+  )}
   {voicings.length > 0 && STRINGS.map((_, i) => i).reverse().map((i) => {
     const s = STRINGS[i]
     const f = v ? v.find(x => x.string === i) : null
@@ -788,19 +795,19 @@ export default function Home() {
       <div
         key={i}
         className={`grid min-h-[72px] grid-cols-[62px_minmax(72px,1fr)_48px] items-center gap-2 rounded-[22px] px-3 py-2 shadow-sm ${
-          f ? noteColor(f.note, key) : "bg-[#cfc2ae]"
+          f ? noteColor(f.note, key) : "bg-[var(--surface-muted)]"
         }`}
       >
         <div className="flex items-center gap-3">
-          <div className="text-2xl font-black leading-none text-[#24170f]">{s}</div>
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#3a2617] text-base font-black leading-none text-[#fff7eb] shadow-sm">
+          <div className="text-2xl font-black leading-none text-[var(--ink)]">{s}</div>
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--ink)] text-base font-black leading-none text-[#fff8ec] shadow-sm">
             {STRING_NO[i]}
           </div>
         </div>
 
         <div className="flex justify-center">
           <div className={`min-w-[72px] rounded-full px-3 py-2.5 text-center text-base font-black leading-none shadow-sm ${
-            f ? "bg-[#fff7eb]/90 text-[#24170f]" : "bg-[#e6d8c3] text-[#5a4632]"
+            f ? "bg-[#fffaf0]/90 text-[var(--ink)]" : "bg-[var(--muted-badge)] text-[var(--muted-badge-text)]"
           }`}>
             {status}
           </div>
@@ -808,13 +815,13 @@ export default function Home() {
 
         <div className="flex justify-end">
           <div className="hidden">
-            {f ? f.fret : "—"}
+            {f ? f.fret : "\u2014"}
           </div>
 
           <div
-            className={`${f ? "flex" : "hidden"} h-11 w-11 items-center justify-center rounded-full bg-[#3a2617] text-xl font-black leading-none text-[#fff7eb] shadow-sm`}
+            className={`${f ? "flex" : "hidden"} h-11 w-11 items-center justify-center rounded-full bg-[var(--ink)] text-xl font-black leading-none text-[#fff8ec] shadow-sm`}
           >
-            {f ? f.note : "—"}
+            {f ? f.note : "\u2014"}
           </div>
         </div>
       </div>
