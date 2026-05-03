@@ -1,7 +1,18 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { analyzeChord, buildDiatonicChords, buildProgressionSuggestions, buildScaleFromMode, type Fret } from '@/app/lib/chordEngine'
+import {
+  analyzeChord,
+  buildDiatonicChords,
+  buildProgressionSuggestions,
+  buildScaleFromMode,
+  getChordRoot,
+  getFretNote,
+  getNoteIndex,
+  parseChordSymbol,
+  type Fret,
+  type Quality
+} from '@/app/lib/chordEngine'
 
 const STRINGS: string[] = ["E", "A", "D", "G", "B", "E"]
 const STRING_NO: number[] = [6, 5, 4, 3, 2, 1]
@@ -35,46 +46,7 @@ type VoicingItem = {
   role: string
 }
 
-/* ---------------- NEW: COLOR + DEGREE HELPERS ---------------- */
-
-const NOTE_ORDER = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"]
-
-function normalize(note:string){
-  const clean = note.trim()
-  const canonical = clean.charAt(0).toUpperCase() + clean.slice(1)
-  const map: Record<string, string> = {Db:"C#",Eb:"D#",Gb:"F#",Ab:"G#",Bb:"A#"}
-  return map[canonical] || canonical
-}
-
-type ParsedChordName = {
-  root: string
-  quality: "maj" | "m" | "7" | "maj7" | "m7" | "m7b5" | "dim" | "dim7" | "sus2" | "sus4" | "7sus2" | "7sus4" | "aug"
-}
-
-function parseChordName(chord: string): ParsedChordName | null {
-  const rootMatch = chord.match(/^([A-G](?:#|b)?)/i)
-  if(!rootMatch) return null
-
-  const root = normalize(rootMatch[1])
-  const tail = chord.slice(rootMatch[0].length).toLowerCase()
-
-  if(tail.includes("m7b5")) return { root, quality: "m7b5" }
-  if(tail.includes("dim7")) return { root, quality: "dim7" }
-  if(tail.includes("dim")) return { root, quality: "dim" }
-  if(tail.includes("7sus2")) return { root, quality: "7sus2" }
-  if(tail.includes("7sus4")) return { root, quality: "7sus4" }
-  if(tail.includes("sus2")) return { root, quality: "sus2" }
-  if(tail.includes("sus4")) return { root, quality: "sus4" }
-  if(tail.includes("aug") || tail.includes("+")) return { root, quality: "aug" }
-  if(tail.includes("maj7")) return { root, quality: "maj7" }
-  if(tail.includes("m7")) return { root, quality: "m7" }
-  if(tail.includes("7")) return { root, quality: "7" }
-  if(tail.includes("m")) return { root, quality: "m" }
-
-  return { root, quality: "maj" }
-}
-
-function romanForQuality(roman: string, quality: ParsedChordName["quality"]) {
+function romanForQuality(roman: string, quality: Quality) {
   if(quality === "m" || quality === "m7" || quality === "m7b5") {
     return roman.toLowerCase()
   }
@@ -86,8 +58,8 @@ function romanForQuality(roman: string, quality: ParsedChordName["quality"]) {
   return roman
 }
 
-function qualityDegreeSuffix(quality: ParsedChordName["quality"]) {
-  const suffixes: Record<ParsedChordName["quality"], string> = {
+function qualityDegreeSuffix(quality: Quality) {
+  const suffixes: Record<Quality, string> = {
     maj: "",
     m: "",
     "7": "7",
@@ -107,11 +79,12 @@ function qualityDegreeSuffix(quality: ParsedChordName["quality"]) {
 }
 
 function getDegree(chord:string, key:string){
-  const parsed = parseChordName(chord)
+  const parsed = parseChordSymbol(chord)
   if(!parsed) return null
 
-  const rootIdx = NOTE_ORDER.indexOf(parsed.root)
-  const keyIdx = NOTE_ORDER.indexOf(normalize(key))
+  const rootIdx = getNoteIndex(parsed.root)
+  const keyIdx = getNoteIndex(key)
+  if(rootIdx < 0 || keyIdx < 0) return null
 
   const diff = (rootIdx - keyIdx + 12) % 12
 
@@ -130,14 +103,8 @@ function getDegree(chord:string, key:string){
     11:"VII"
   }
 
-  const roman = romanForQuality(MAP[diff], parsed.quality)
-  return `${roman}${qualityDegreeSuffix(parsed.quality)}`
-}
-
-function getChordRoot(chord:string){
-  const rootMatch = chord.match(/^([A-G](?:#|b)?)/i)
-  if(!rootMatch) return null
-  return normalize(rootMatch[1])
+  const roman = romanForQuality(MAP[diff], parsed.type)
+  return `${roman}${qualityDegreeSuffix(parsed.type)}`
 }
 
 const COLORS = [
@@ -159,23 +126,22 @@ function chordColor(chord:string, key:string){
   const root = getChordRoot(chord)
   if(!root) return COLORS[0]
 
-  const rootIdx = NOTE_ORDER.indexOf(root)
-  const keyIdx = NOTE_ORDER.indexOf(normalize(key))
+  const rootIdx = getNoteIndex(root)
+  const keyIdx = getNoteIndex(key)
+  if(rootIdx < 0 || keyIdx < 0) return COLORS[0]
+
   const diff = (rootIdx - keyIdx + 12) % 12
 
   return COLORS[diff]
 }
 
 function noteColor(note:string, key:string){
-  const idx = NOTE_ORDER.indexOf(normalize(note))
-  const keyIdx = NOTE_ORDER.indexOf(normalize(key))
+  const idx = getNoteIndex(note)
+  const keyIdx = getNoteIndex(key)
+  if(idx < 0 || keyIdx < 0) return COLORS[0]
+
   const diff = (idx - keyIdx + 12) % 12
   return COLORS[diff]
-}
-
-function fretNote(open:string, fret:number){
-  const idx = NOTE_ORDER.indexOf(normalize(open))
-  return NOTE_ORDER[(idx + fret) % 12]
 }
 
 function stringThickness(stringIndex: number) {
@@ -305,8 +271,56 @@ export default function Home() {
     computeVoicings(next[i])
   }
 
-  const current = selectedIndex !== null ? progression[selectedIndex] : null
+  function removeChord(index: number) {
+    const next = [...progression]
+    next.splice(index, 1)
+    setProgression(next)
+
+    if(selectedIndex === index) {
+      setSelectedIndex(null)
+      setInputChord("")
+      setVoicings([])
+      setVoicingIndex(0)
+    } else if(selectedIndex !== null && selectedIndex > index) {
+      setSelectedIndex(selectedIndex - 1)
+    }
+  }
+
+  function moveChord(index: number, direction: -1 | 1) {
+    const target = index + direction
+    if(target < 0 || target >= progression.length) return
+
+    const next = [...progression]
+    ;[next[target], next[index]] = [next[index], next[target]]
+    setProgression(next)
+    setSelectedIndex(target)
+    setInputChord(next[target].chord)
+    setInputStrings(next[target].strings)
+    computeVoicings(next[target])
+  }
+
+  function updateVoicingIndex(nextIndex: number) {
+    if(voicings.length === 0) return
+
+    const safeIndex = Math.max(0, Math.min(voicings.length - 1, nextIndex))
+    setVoicingIndex(safeIndex)
+
+    if (selectedIndex !== null && progression[selectedIndex]) {
+      const next = [...progression]
+      next[selectedIndex] = { ...next[selectedIndex], voicingIndex: safeIndex }
+      setProgression(next)
+    }
+  }
+
+  const current = selectedIndex !== null ? progression[selectedIndex] ?? null : null
   const v = voicings[voicingIndex]
+  const canAddChord = inputChord.trim().length > 0
+  const canResolveBackward = resolveWithin > RESOLVE_WITHIN_OPTIONS[0]
+  const canResolveForward = resolveWithin < RESOLVE_WITHIN_OPTIONS[RESOLVE_WITHIN_OPTIONS.length - 1]
+  const canStepStringsBackward = inputStrings > STRING_COUNTS[0]
+  const canStepStringsForward = inputStrings < STRING_COUNTS[STRING_COUNTS.length - 1]
+  const canStepVoicingBackward = voicingIndex > 0
+  const canStepVoicingForward = voicings.length > 0 && voicingIndex < voicings.length - 1
   const scaleNotes = useMemo(() => {
     return new Set(buildScaleFromMode(key, mode))
   }, [key, mode])
@@ -321,8 +335,10 @@ export default function Home() {
             <div className="grid grid-cols-6 gap-2">
               {KEY_OPTIONS.map((option) => (
                 <button
+                  type="button"
                   key={option}
                   onClick={() => setKey(option)}
+                  aria-pressed={key === option}
                   className={`min-h-10 rounded-2xl px-3 py-2 text-sm font-black shadow-sm border border-[#3a2617]/20 hover:brightness-95 ${
                     key === option
                       ? "bg-[#3a2617] text-[#fff7eb]"
@@ -340,8 +356,10 @@ export default function Home() {
             <div className="grid grid-cols-8 gap-2">
               {MODE_OPTIONS.map((option, i) => (
                 <button
+                  type="button"
                   key={option.value}
                   onClick={() => setMode(option.value)}
+                  aria-pressed={mode === option.value}
                   className={`${i === 4 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-3 py-2 text-sm font-black shadow-sm border border-[#3a2617]/20 hover:brightness-95 ${
                     mode === option.value
                       ? "bg-[#3a2617] text-[#fff7eb]"
@@ -360,18 +378,23 @@ export default function Home() {
             <span>Progression</span>
           </div>
 
-          <div className="progression-scroll max-w-full overflow-x-auto overflow-y-hidden pt-4 pb-3">
-          <div className="flex h-[90px] w-max items-start gap-3 pr-3">
+          <div className="progression-scroll max-w-full overflow-x-auto overflow-y-hidden pl-2 pr-5 pt-6 pb-4">
+          <div className="flex h-[104px] w-max items-start gap-3 pr-3">
             {progression.map((c, i) => {
   const degree = getDegree(c.chord, key)
+  const canMoveLeft = i > 0
+  const canMoveRight = i < progression.length - 1
 
   return (
     <div key={i} className="flex flex-col items-center gap-2">
 
       <div className="relative">
-        <div
+        <button
+          type="button"
           className={`relative px-6 py-3 text-xl font-extrabold rounded-full border-2 border-[#3a2617] shadow cursor-pointer flex items-center gap-3 ${chordColor(c.chord, key)} ${i === selectedIndex ? "ring-4 ring-[#3a2617]/75" : ""}`}
           onClick={() => selectChord(i)}
+          aria-pressed={i === selectedIndex}
+          aria-label={`Select ${c.chord}`}
         >
           <span className="text-xl tracking-tight">{c.chord}</span>
 
@@ -380,47 +403,40 @@ export default function Home() {
               {degree}
             </span>
           )}
-        </div>
+        </button>
 
         <button
+          type="button"
           onClick={(e) => {
             e.stopPropagation()
-            const next = [...progression]
-            next.splice(i, 1)
-            setProgression(next)
-            if (selectedIndex === i) setSelectedIndex(null)
+            removeChord(i)
           }}
-          className="absolute -top-2 -right-2 w-7 h-7 text-sm bg-[#3a2617] text-[#fff7eb] rounded-full flex items-center justify-center shadow"
+          aria-label={`Remove ${c.chord}`}
+          className="absolute -top-2 -right-2 w-7 h-7 text-sm bg-[#3a2617] text-[#fff7eb] rounded-full flex items-center justify-center shadow hover:brightness-110"
         >
-          ×
+          {"\u00d7"}
         </button>
       </div>
 
       <div className="flex gap-2">
         <button
-          onClick={() => {
-            if (i === 0) return
-            const next = [...progression]
-            ;[next[i - 1], next[i]] = [next[i], next[i - 1]]
-            setProgression(next)
-            setSelectedIndex(i - 1)
-          }}
-          className="text-sm font-bold px-3 py-2 bg-[#c7aa7c] text-[#24170f] rounded-full shadow-sm"
+          type="button"
+          onClick={() => moveChord(i, -1)}
+          disabled={!canMoveLeft}
+          aria-label={`Move ${c.chord} left`}
+          className={`text-sm font-bold px-3 py-2 bg-[#c7aa7c] text-[#24170f] rounded-full shadow-sm ${canMoveLeft ? "hover:brightness-95" : "cursor-not-allowed opacity-45"}`}
         >
-          ←
+          {"\u2190"}
         </button>
 
         <button
-          onClick={() => {
-            if (i === progression.length - 1) return
-            const next = [...progression]
-            ;[next[i + 1], next[i]] = [next[i], next[i + 1]]
-            setProgression(next)
-            setSelectedIndex(i + 1)
-          }}
-          className="text-sm font-bold px-3 py-2 bg-[#c7aa7c] text-[#24170f] rounded-full shadow-sm"
+          type="button"
+          onClick={() => moveChord(i, 1)}
+          disabled={!canMoveRight}
+          aria-label={`Move ${c.chord} right`}
+          className={`text-sm font-bold px-3 py-2 bg-[#c7aa7c] text-[#24170f] rounded-full shadow-sm ${canMoveRight ? "hover:brightness-95" : "cursor-not-allowed opacity-45"}`}
         >
-          →
+          {"\u2192"}
         </button>
       </div>
 
@@ -434,17 +450,50 @@ export default function Home() {
             <div>
               <div className="text-sm font-extrabold mb-2 text-[#6b4b2f]">Add Chord</div>
               <div className="flex max-w-[360px] gap-3">
-                <input value={inputChord} onChange={(e) => updateChord(e.target.value)} placeholder="Chord" className="w-64 px-4 py-3 text-base font-semibold border-2 rounded-2xl bg-[#fff7eb] border-[#b9966a] text-[#24170f]" />
-                <button onClick={addChord} className="h-11 w-14 rounded-2xl bg-[#c7aa7c] text-xl font-black text-[#24170f] shadow-sm">+</button>
+                <input
+                  value={inputChord}
+                  onChange={(e) => updateChord(e.target.value)}
+                  onKeyDown={(e) => {
+                    if(e.key === "Enter") addChord()
+                  }}
+                  placeholder="Chord"
+                  aria-label="Chord name"
+                  className="w-64 px-4 py-3 text-base font-semibold border-2 rounded-2xl bg-[#fff7eb] border-[#b9966a] text-[#24170f]"
+                />
+                <button
+                  type="button"
+                  onClick={addChord}
+                  disabled={!canAddChord}
+                  aria-label="Add chord"
+                  className={`h-11 w-14 rounded-2xl bg-[#c7aa7c] text-xl font-black text-[#24170f] shadow-sm ${canAddChord ? "hover:brightness-95" : "cursor-not-allowed opacity-45"}`}
+                >
+                  +
+                </button>
               </div>
             </div>
 
             <div>
               <div className="text-sm font-extrabold mb-2 text-[#6b4b2f]">Resolve In</div>
               <div className="flex items-center gap-3">
-                <button onClick={() => stepResolveWithin(-1)} className="px-4 py-2 rounded-full bg-[#c7aa7c] text-[#24170f] shadow-sm">←</button>
+                <button
+                  type="button"
+                  onClick={() => stepResolveWithin(-1)}
+                  disabled={!canResolveBackward}
+                  aria-label="Resolve sooner"
+                  className={`px-4 py-2 rounded-full bg-[#c7aa7c] text-[#24170f] shadow-sm ${canResolveBackward ? "hover:brightness-95" : "cursor-not-allowed opacity-45"}`}
+                >
+                  {"\u2190"}
+                </button>
                 <span className="min-w-12 px-4 py-2 rounded-full bg-[#e1cfb2] text-center font-black text-[#3a2617]">{resolveWithin}</span>
-                <button onClick={() => stepResolveWithin(1)} className="px-4 py-2 rounded-full bg-[#c7aa7c] text-[#24170f] shadow-sm">→</button>
+                <button
+                  type="button"
+                  onClick={() => stepResolveWithin(1)}
+                  disabled={!canResolveForward}
+                  aria-label="Resolve later"
+                  className={`px-4 py-2 rounded-full bg-[#c7aa7c] text-[#24170f] shadow-sm ${canResolveForward ? "hover:brightness-95" : "cursor-not-allowed opacity-45"}`}
+                >
+                  {"\u2192"}
+                </button>
               </div>
             </div>
           </div>
@@ -459,7 +508,7 @@ export default function Home() {
                   const degree = getDegree(s, key)
 
                   return (
-                    <button key={s} onClick={() => addSuggestion(s)} className={`${chordColor(s, key)} ${i === 4 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-2 py-2 text-[15px] font-black shadow-sm border border-[#3a2617]/20 hover:brightness-95 flex items-center justify-center gap-1.5 min-w-0`}>
+                    <button type="button" key={s} onClick={() => addSuggestion(s)} aria-label={`Add ${s}`} className={`${chordColor(s, key)} ${i === 4 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-2 py-2 text-[15px] font-black shadow-sm border border-[#3a2617]/20 hover:brightness-95 flex items-center justify-center gap-1.5 min-w-0`}>
                       <span className="truncate">{s}</span>
                       {degree && (
                         <span className="shrink-0 rounded-full bg-[#3a2617] px-2 py-1 text-[11px] font-black leading-none text-[#fff7eb]">
@@ -479,7 +528,7 @@ export default function Home() {
                   const degree = getDegree(s, key)
 
                   return (
-                    <button key={s} onClick={() => addSuggestion(s)} className={`${chordColor(s, key)} ${i === 3 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-3 py-2 text-base font-black shadow-sm border border-[#3a2617]/20 hover:brightness-95 flex items-center justify-center gap-2 min-w-0`}>
+                    <button type="button" key={s} onClick={() => addSuggestion(s)} aria-label={`Add ${s}`} className={`${chordColor(s, key)} ${i === 3 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-3 py-2 text-base font-black shadow-sm border border-[#3a2617]/20 hover:brightness-95 flex items-center justify-center gap-2 min-w-0`}>
                       <span className="truncate">{s}</span>
                       {degree && (
                         <span className="shrink-0 rounded-full bg-[#3a2617] px-2 py-1 text-[11px] font-black leading-none text-[#fff7eb]">
@@ -499,7 +548,7 @@ export default function Home() {
                   const degree = getDegree(s, key)
 
                   return (
-                    <button key={s} onClick={() => addSuggestion(s)} className={`${chordColor(s, key)} ${i === 3 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-3 py-2 text-base font-black shadow-sm border border-[#3a2617]/20 hover:brightness-95 flex items-center justify-center gap-2 min-w-0`}>
+                    <button type="button" key={s} onClick={() => addSuggestion(s)} aria-label={`Add ${s}`} className={`${chordColor(s, key)} ${i === 3 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-3 py-2 text-base font-black shadow-sm border border-[#3a2617]/20 hover:brightness-95 flex items-center justify-center gap-2 min-w-0`}>
                       <span className="truncate">{s}</span>
                       {degree && (
                         <span className="shrink-0 rounded-full bg-[#3a2617] px-2 py-1 text-[11px] font-black leading-none text-[#fff7eb]">
@@ -519,7 +568,11 @@ export default function Home() {
 
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_300px] gap-3">
         <div className="bg-[#f4eadb] border-2 border-[#b9966a] rounded-[24px] p-4 shadow-[0_8px_20px_rgba(58,38,23,0.08)]">
-          {!current && <div className="text-2xl font-extrabold text-[#3a2617]">Add a chord</div>}
+          {!current && (
+            <div className="rounded-[20px] border border-[#b9966a]/70 bg-[#eadcc8]/70 p-5 text-2xl font-extrabold text-[#3a2617] shadow-inner">
+              No chord selected
+            </div>
+          )}
 
           {current && (
             <>
@@ -529,34 +582,50 @@ export default function Home() {
                 <div>
                   <div className="text-sm font-extrabold mb-2 text-[#6b4b2f]">Voicing</div>
                   <div className="flex items-center gap-3">
-                    <button onClick={() => {
-                      const nextIndex = Math.max(0, voicingIndex - 1)
-                      setVoicingIndex(nextIndex)
-                      if (selectedIndex !== null && progression[selectedIndex]) {
-                        const next = [...progression]
-                        next[selectedIndex] = { ...next[selectedIndex], voicingIndex: nextIndex }
-                        setProgression(next)
-                      }
-                    }} className="px-4 py-2 rounded-full bg-[#c7aa7c] text-[#24170f] shadow-sm">←</button>
+                    <button
+                      type="button"
+                      onClick={() => updateVoicingIndex(voicingIndex - 1)}
+                      disabled={!canStepVoicingBackward}
+                      aria-label="Previous voicing"
+                      className={`px-4 py-2 rounded-full bg-[#c7aa7c] text-[#24170f] shadow-sm ${canStepVoicingBackward ? "hover:brightness-95" : "cursor-not-allowed opacity-45"}`}
+                    >
+                      {"\u2190"}
+                    </button>
                     <span className="px-4 py-2 rounded-full bg-[#e1cfb2] text-[#3a2617]">{voicingIndex + 1}/{voicings.length}</span>
-                    <button onClick={() => {
-                      const nextIndex = Math.min(voicings.length - 1, voicingIndex + 1)
-                      setVoicingIndex(nextIndex)
-                      if (selectedIndex !== null && progression[selectedIndex]) {
-                        const next = [...progression]
-                        next[selectedIndex] = { ...next[selectedIndex], voicingIndex: nextIndex }
-                        setProgression(next)
-                      }
-                    }} className="px-4 py-2 rounded-full bg-[#c7aa7c] text-[#24170f] shadow-sm">→</button>
+                    <button
+                      type="button"
+                      onClick={() => updateVoicingIndex(voicingIndex + 1)}
+                      disabled={!canStepVoicingForward}
+                      aria-label="Next voicing"
+                      className={`px-4 py-2 rounded-full bg-[#c7aa7c] text-[#24170f] shadow-sm ${canStepVoicingForward ? "hover:brightness-95" : "cursor-not-allowed opacity-45"}`}
+                    >
+                      {"\u2192"}
+                    </button>
                   </div>
                 </div>
 
                 <div>
                   <div className="text-sm font-extrabold mb-2 text-[#6b4b2f]">Strings</div>
                   <div className="flex items-center gap-3">
-                    <button onClick={() => stepStrings(-1)} className="px-4 py-2 rounded-full bg-[#c7aa7c] text-[#24170f] shadow-sm">←</button>
+                    <button
+                      type="button"
+                      onClick={() => stepStrings(-1)}
+                      disabled={!canStepStringsBackward}
+                      aria-label="Use fewer strings"
+                      className={`px-4 py-2 rounded-full bg-[#c7aa7c] text-[#24170f] shadow-sm ${canStepStringsBackward ? "hover:brightness-95" : "cursor-not-allowed opacity-45"}`}
+                    >
+                      {"\u2190"}
+                    </button>
                     <span className="px-4 py-2 rounded-full bg-[#e1cfb2] text-[#3a2617]">{inputStrings}</span>
-                    <button onClick={() => stepStrings(1)} className="px-4 py-2 rounded-full bg-[#c7aa7c] text-[#24170f] shadow-sm">→</button>
+                    <button
+                      type="button"
+                      onClick={() => stepStrings(1)}
+                      disabled={!canStepStringsForward}
+                      aria-label="Use more strings"
+                      className={`px-4 py-2 rounded-full bg-[#c7aa7c] text-[#24170f] shadow-sm ${canStepStringsForward ? "hover:brightness-95" : "cursor-not-allowed opacity-45"}`}
+                    >
+                      {"\u2192"}
+                    </button>
                   </div>
                 </div>
 
@@ -564,7 +633,9 @@ export default function Home() {
                   <div className="text-sm font-extrabold mb-2 text-[#6b4b2f]">Notes</div>
                   <div className="flex flex-wrap gap-3">
                     <button
+                      type="button"
                       onClick={() => setShowAllNotes(!showAllNotes)}
+                      aria-pressed={showAllNotes}
                       className={`px-5 py-2 rounded-full text-base font-extrabold shadow-sm ${
                         showAllNotes
                           ? "bg-[#3a2617] text-[#fff7eb]"
@@ -574,7 +645,9 @@ export default function Home() {
                       {showAllNotes ? "Hide all notes" : "Show all notes"}
                     </button>
                     <button
+                      type="button"
                       onClick={() => setHighlightScale(!highlightScale)}
+                      aria-pressed={highlightScale}
                       className={`px-5 py-2 rounded-full text-base font-extrabold shadow-sm ${
                         highlightScale
                           ? "bg-[#3a2617] text-[#fff7eb]"
@@ -652,7 +725,7 @@ export default function Home() {
                         </div>
 
                         {FRET_RANGE.map((fret) => {
-                          const note = fretNote(s, fret)
+                          const note = getFretNote(s, fret)
                           const isActive = active?.fret === fret
                           const isScaleNote = scaleNotes.has(note)
                           const showNote = showAllNotes || isActive || (highlightScale && isScaleNote)

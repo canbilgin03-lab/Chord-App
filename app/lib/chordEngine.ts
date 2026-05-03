@@ -1,6 +1,6 @@
 export type Fret = number | "x"
 
-type Quality =
+export type Quality =
   | "maj"
   | "m"
   | "7"
@@ -61,7 +61,8 @@ type ResolutionPlan = {
   targetRoot: string
 }
 
-const NOTES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"]
+export const NOTE_ORDER = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"]
+const NOTES = NOTE_ORDER
 const TUNING = ["E","A","D","G","B","E"]
 const FRETBOARD_MAX_FRET = 18
 
@@ -115,6 +116,27 @@ function parse(symbol: string): { root: string; type: Quality } {
   if (tail.includes("m")) return { root, type:"m" }
 
   return { root, type:"maj" }
+}
+
+export function normalizeNote(note: string) {
+  return normalize(note)
+}
+
+export function parseChordSymbol(symbol: string): { root: string; type: Quality } | null {
+  if(!symbol.trim().match(/^([A-G](?:#|b)?)(.*)$/i)) return null
+  return parse(symbol)
+}
+
+export function getChordRoot(symbol: string) {
+  return parseChordSymbol(symbol)?.root ?? null
+}
+
+export function getNoteIndex(note: string) {
+  return idx(note)
+}
+
+export function getFretNote(open: string, fret: number) {
+  return fretNote(open, fret)
 }
 
 function buildChord(root: string, type: Quality): ChordShape {
