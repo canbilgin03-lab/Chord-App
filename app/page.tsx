@@ -778,7 +778,7 @@ export default function Home() {
         </div>
 
         <div className="surface-panel p-4">
-          <div className="mb-3 text-lg font-black text-[var(--ink)]">Fretboard</div>
+          <div className="mb-3 text-lg font-black text-[var(--ink)]">Voicing</div>
 
           <div className="flex flex-col gap-2.5">
   {voicings.length === 0 && (
