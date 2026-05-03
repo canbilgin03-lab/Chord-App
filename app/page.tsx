@@ -10,8 +10,10 @@ import {
   getChordDisplayNotes,
   getFretNote,
   getNoteIndex,
+  normalizeNote,
   normalizeChordSymbol,
   parseChordSymbol,
+  spellNoteForKey,
   type Fret,
   type Quality
 } from '@/app/lib/chordEngine'
@@ -36,10 +38,36 @@ const FRETBOARD_GRID = `80px 48px repeat(${DISPLAY_FRETS - 1}, minmax(42px, 1fr)
 const FRETBOARD_HEADER_HEIGHT = 48
 const OPEN_STRING_MIDI = [40, 45, 50, 55, 59, 64]
 const MIDI_NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+const AUDIO_SPEED_OPTIONS = ["quick", "tight", "easy", "slow"] as const
 const AUDIO_STEP_SECONDS = {
+  quick: 0.035,
   tight: 0.055,
   easy: 0.085,
   slow: 0.125
+}
+const AUDIO_NOTE_LENGTH_SECONDS: Record<AudioSpeed, number> = {
+  quick: 0.92,
+  tight: 1.05,
+  easy: 1.18,
+  slow: 1.34
+}
+const AUDIO_STRUM_TAIL_MS: Record<AudioSpeed, number> = {
+  quick: 620,
+  tight: 780,
+  easy: 980,
+  slow: 1220
+}
+const AUDIO_MIN_CHORD_DELAY_MS: Record<AudioSpeed, number> = {
+  quick: 360,
+  tight: 460,
+  easy: 560,
+  slow: 700
+}
+const AUDIO_CHORD_MODE_DURATION_MS: Record<AudioSpeed, number> = {
+  quick: 760,
+  tight: 960,
+  easy: 1180,
+  slow: 1460
 }
 const AUDIO_LEAD_SECONDS = 0.055
 const AUDIO_REPEAT_OPTIONS = [1, 2, 3, 4]
@@ -76,7 +104,7 @@ type VoicingItem = {
 }
 
 type AudioDirection = "down" | "up"
-type AudioSpeed = keyof typeof AUDIO_STEP_SECONDS
+type AudioSpeed = typeof AUDIO_SPEED_OPTIONS[number]
 
 type AudioNote = {
   label: string
@@ -120,6 +148,7 @@ function qualityDegreeSuffix(quality: Quality) {
     maj: "",
     m: "",
     "7": "7",
+    "7b5": "7\u266d5",
     maj7: "\u03947",
     m7: "7",
     m7b5: "\u00f87",
@@ -201,6 +230,13 @@ function chordDisplayName(chord: string) {
   return normalizeChordSymbol(chord)
 }
 
+function defaultStringCountForChord(chord: string) {
+  if(!parseChordSymbol(chord)) return 4
+
+  const uniqueNotes = new Set(getChordDisplayNotes(chord).map(item => item.note))
+  return uniqueNotes.size > 3 ? 5 : 4
+}
+
 function noteColor(note:string, key:string){
   const idx = getNoteIndex(note)
   const keyIdx = getNoteIndex(key)
@@ -208,6 +244,10 @@ function noteColor(note:string, key:string){
 
   const diff = (idx - keyIdx + 12) % 12
   return COLORS[diff]
+}
+
+function noteDisplayName(note: string, key: string, mode: string) {
+  return spellNoteForKey(note, key, mode)
 }
 
 function stringThickness(stringIndex: number) {
@@ -363,11 +403,14 @@ export default function Home() {
   function updateChord(val: string) {
     setInputChord(val)
     if (selectedIndex === null) return
+    if(!parseChordSymbol(val.trim())) return
 
+    const defaultStrings = defaultStringCountForChord(val)
     const next = [...progression]
-    next[selectedIndex] = { ...next[selectedIndex], chord: val }
+    next[selectedIndex] = { ...next[selectedIndex], chord: val, strings: defaultStrings, voicingIndex: 0 }
     progressionRef.current = next
     setProgression(next)
+    setInputStrings(defaultStrings)
     computeVoicings(next[selectedIndex])
   }
 
@@ -381,10 +424,12 @@ export default function Home() {
     setInputChord(chord)
     if(selectedIndex === null) return
 
+    const defaultStrings = defaultStringCountForChord(chord)
     const next = [...progression]
-    next[selectedIndex] = { ...next[selectedIndex], chord }
+    next[selectedIndex] = { ...next[selectedIndex], chord, strings: defaultStrings, voicingIndex: 0 }
     progressionRef.current = next
     setProgression(next)
+    setInputStrings(defaultStrings)
     computeVoicings(next[selectedIndex])
   }
 
@@ -421,21 +466,27 @@ export default function Home() {
   }
 
   function cycleAudioSpeed() {
-    setAudioSpeed((current) => current === "tight" ? "easy" : current === "easy" ? "slow" : "tight")
+    setAudioSpeed((current) => {
+      const currentIndex = AUDIO_SPEED_OPTIONS.indexOf(current)
+      return AUDIO_SPEED_OPTIONS[(currentIndex + 1) % AUDIO_SPEED_OPTIONS.length]
+    })
   }
 
   function addChord() {
     const clean = inputChord.trim()
     if (!clean) return
+    if(!parseChordSymbol(clean)) return
     const chord = normalizeChordSymbol(clean)
+    const defaultStrings = defaultStringCountForChord(chord)
 
-    const next = [...progression, { chord, strings: inputStrings, voicingIndex: 0 }]
+    const next = [...progression, { chord, strings: defaultStrings, voicingIndex: 0 }]
     progressionRef.current = next
     setProgression(next)
 
     const i = next.length - 1
     setSelectedIndex(i)
     setInputChord(chord)
+    setInputStrings(defaultStrings)
     setVoicingIndex(0)
     computeVoicings(next[i])
     if(progressionPlayingRef.current && progressionPlayIndex === null) {
@@ -444,14 +495,15 @@ export default function Home() {
   }
 
   function addSuggestion(chord: string) {
-    const next = [...progression, { chord, strings: 4, voicingIndex: 0 }]
+    const defaultStrings = defaultStringCountForChord(chord)
+    const next = [...progression, { chord, strings: defaultStrings, voicingIndex: 0 }]
     progressionRef.current = next
     setProgression(next)
 
     const i = next.length - 1
     setSelectedIndex(i)
     setInputChord(chord)
-    setInputStrings(4)
+    setInputStrings(defaultStrings)
     setVoicingIndex(0)
     computeVoicings(next[i])
   }
@@ -630,15 +682,15 @@ export default function Home() {
       notes.forEach((item, index) => {
         engine.sampler.triggerAttackRelease(item.note, 1.35, now + index * 0.012 + humanizedOffset(index), humanizedVelocity(index))
       })
-      return 1180
+      return AUDIO_CHORD_MODE_DURATION_MS[speed]
     }
 
     notes.forEach((item, index) => {
-      const noteLength = speed === "tight" ? 1.05 : speed === "easy" ? 1.18 : 1.34
+      const noteLength = AUDIO_NOTE_LENGTH_SECONDS[speed]
       engine.sampler.triggerAttackRelease(item.note, noteLength, now + index * step + humanizedOffset(index), humanizedVelocity(index))
     })
 
-    return Math.round((notes.length - 1) * step * 1000 + 980)
+    return Math.round((notes.length - 1) * step * 1000 + AUDIO_STRUM_TAIL_MS[speed])
   }
 
   async function playVoicingAudio(mode: "strum" | "chord") {
@@ -719,7 +771,8 @@ export default function Home() {
         stopProgressionAudio()
         return
       }
-      const nextDelay = Math.max(duration + 180, 520)
+      const currentSpeed = audioSpeedRef.current
+      const nextDelay = Math.max(duration, AUDIO_MIN_CHORD_DELAY_MS[currentSpeed])
 
       repeatsDone += 1
       if(repeatsDone >= audioRepeatsRef.current) {
@@ -753,7 +806,7 @@ export default function Home() {
 
   const current = selectedIndex !== null ? progression[selectedIndex] ?? null : null
   const v = voicings[voicingIndex]
-  const canAddChord = inputChord.trim().length > 0
+  const canAddChord = Boolean(parseChordSymbol(inputChord.trim()))
   const canResolveBackward = resolveWithin > RESOLVE_WITHIN_OPTIONS[0]
   const canResolveForward = resolveWithin < RESOLVE_WITHIN_OPTIONS[RESOLVE_WITHIN_OPTIONS.length - 1]
   const canRepeatLess = audioRepeats > AUDIO_REPEAT_OPTIONS[0]
@@ -765,14 +818,14 @@ export default function Home() {
   const audioNotes = voicingAudioNotes(v, audioDirection)
   const canPlayProgression = progression.length > 0
   const chordToneNotes: ChordToneBubble[] = useMemo(() => {
-    const symbolNotes = current ? getChordDisplayNotes(current.chord) : []
+    const symbolNotes = current ? getChordDisplayNotes(current.chord, key, mode) : []
     const flashingVoicingNotes = new Set(
       (v || [])
         .filter((entry) => {
           const fret = typeof entry.fret === "number" ? entry.fret : 0
           return flashingNoteIds.has(audioNoteId(entry.string, fret))
         })
-        .map((entry) => entry.note)
+        .map((entry) => normalizeNote(entry.note))
     )
 
     return symbolNotes.length
@@ -780,15 +833,15 @@ export default function Home() {
         note: item.note,
         role: item.role,
         id: `${item.note}:${item.role}:${index}`,
-        isFlashing: flashingVoicingNotes.has(item.note)
+        isFlashing: flashingVoicingNotes.has(normalizeNote(item.note))
       }))
       : []
-  }, [current, v, flashingNoteIds])
+  }, [current, v, flashingNoteIds, key, mode])
   const chordNotes = useMemo(() => {
-    return new Set(chordToneNotes.map(item => item.note))
+    return new Set(chordToneNotes.map(item => normalizeNote(item.note)))
   }, [chordToneNotes])
   const scaleNotes = useMemo(() => {
-    return new Set(buildScaleFromMode(key, mode))
+    return new Set(buildScaleFromMode(key, mode).map(note => normalizeNote(note)))
   }, [key, mode])
 
   useEffect(() => {
@@ -1050,9 +1103,10 @@ export default function Home() {
                   aria-label="Change playback speed"
                   title={`Speed: ${audioSpeed}`}
                 >
-                  <span className="flex h-6 w-7 items-end justify-center gap-1" aria-hidden="true">
-                    <span className={`w-1.5 rounded-full bg-current ${audioSpeed === "tight" ? "h-2 opacity-100" : "h-2 opacity-35"}`} />
-                    <span className={`w-1.5 rounded-full bg-current ${audioSpeed === "easy" ? "h-4 opacity-100" : "h-4 opacity-50"}`} />
+                  <span className="flex h-6 w-8 items-end justify-center gap-1" aria-hidden="true">
+                    <span className={`w-1.5 rounded-full bg-current ${audioSpeed === "quick" ? "h-1.5 opacity-100" : "h-1.5 opacity-35"}`} />
+                    <span className={`w-1.5 rounded-full bg-current ${audioSpeed === "tight" ? "h-3 opacity-100" : "h-3 opacity-45"}`} />
+                    <span className={`w-1.5 rounded-full bg-current ${audioSpeed === "easy" ? "h-[18px] opacity-100" : "h-[18px] opacity-55"}`} />
                     <span className={`w-1.5 rounded-full bg-current ${audioSpeed === "slow" ? "h-6 opacity-100" : "h-6 opacity-65"}`} />
                   </span>
                 </button>
@@ -1115,7 +1169,7 @@ export default function Home() {
                   const degree = getDegree(s, key)
 
                   return (
-                    <button type="button" key={s} onClick={() => addSuggestion(s)} aria-label={`Add ${s}`} title={`Add ${chordDisplayName(s)} to progression`} className={`${chordColor(s, key)} ${i === 3 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-3 py-2 text-base font-black shadow-sm border border-[var(--ink)]/15 hover:brightness-95 flex items-center justify-center gap-2 min-w-0 transition`}>
+                    <button type="button" key={`${s}-${i}`} onClick={() => addSuggestion(s)} aria-label={`Add ${s}`} title={`Add ${chordDisplayName(s)} to progression`} className={`${chordColor(s, key)} ${i === 3 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-3 py-2 text-base font-black shadow-sm border border-[var(--ink)]/15 hover:brightness-95 flex items-center justify-center gap-2 min-w-0 transition`}>
                       <span className="truncate">{s}</span>
                       {degree && (
                         <span className="shrink-0 rounded-full bg-[var(--ink)] px-2 py-1 text-[11px] font-black leading-none text-[#fff8ec]">
@@ -1135,7 +1189,7 @@ export default function Home() {
                   const degree = getDegree(s, key)
 
                   return (
-                    <button type="button" key={s} onClick={() => addSuggestion(s)} aria-label={`Add ${s}`} title={`Add ${chordDisplayName(s)} to progression`} className={`${chordColor(s, key)} ${i === 3 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-3 py-2 text-base font-black shadow-sm border border-[var(--ink)]/15 hover:brightness-95 flex items-center justify-center gap-2 min-w-0 transition`}>
+                    <button type="button" key={`${s}-${i}`} onClick={() => addSuggestion(s)} aria-label={`Add ${s}`} title={`Add ${chordDisplayName(s)} to progression`} className={`${chordColor(s, key)} ${i === 3 ? "col-start-2" : ""} col-span-2 min-h-10 rounded-2xl px-3 py-2 text-base font-black shadow-sm border border-[var(--ink)]/15 hover:brightness-95 flex items-center justify-center gap-2 min-w-0 transition`}>
                       <span className="truncate">{s}</span>
                       {degree && (
                         <span className="shrink-0 rounded-full bg-[var(--ink)] px-2 py-1 text-[11px] font-black leading-none text-[#fff8ec]">
@@ -1269,16 +1323,18 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="group relative flex w-full items-center gap-2 rounded-[32px] bg-[var(--surface-soft)]/50 p-2 shadow-inner" title="Bass to high">
+                <div className="group relative flex w-full items-start gap-2 rounded-[32px] bg-[var(--surface-soft)]/50 px-3 pb-3 pt-2 shadow-inner" title="Bass to high">
                   {chordToneNotes.flatMap((item, i) => {
                     const items = [
                       <div
                         key={item.id}
-                        className={`relative z-10 flex h-[68px] w-[68px] shrink-0 items-center justify-center rounded-full text-2xl font-black leading-none text-[var(--ink)] shadow-[0_4px_10px_rgba(47,33,24,0.18)] transition duration-150 ${noteColor(item.note, key)} ${item.isFlashing ? "scale-125 brightness-150 ring-4 ring-[#fff8ec] shadow-[0_0_24px_rgba(255,248,236,0.95)]" : ""}`}
+                        className="relative z-10 flex w-[68px] shrink-0 flex-col items-center gap-1.5"
                         title={`${item.note}: ${item.role}`}
                       >
-                        <span>{item.note}</span>
-                        <span className="absolute bottom-1 right-1 flex min-w-6 items-center justify-center rounded-md border border-[var(--line)]/35 bg-[#fff8ec]/90 px-1 py-0.5 text-[10px] font-black leading-none text-[var(--ink-soft)] shadow-sm">
+                        <span className={`flex h-[68px] w-[68px] items-center justify-center rounded-full text-2xl font-black leading-none text-[var(--ink)] shadow-[0_4px_10px_rgba(47,33,24,0.18)] transition duration-150 ${noteColor(item.note, key)} ${item.isFlashing ? "scale-125 brightness-150 ring-4 ring-[#fff8ec] shadow-[0_0_24px_rgba(255,248,236,0.95)]" : ""}`}>
+                          {item.note}
+                        </span>
+                        <span className="flex h-7 min-w-9 items-center justify-center rounded-full border-2 border-[#fff8ec] bg-[var(--ink)] px-2 text-sm font-black leading-none text-[#fff8ec] shadow-[0_2px_6px_rgba(47,33,24,0.28)]">
                           {item.role}
                         </span>
                       </div>
@@ -1288,7 +1344,7 @@ export default function Home() {
                       items.push(
                         <div
                           key={`${item.id}-arrow`}
-                          className="relative flex min-w-10 flex-1 items-center justify-center"
+                          className="relative mt-[30px] flex min-w-10 flex-1 items-center justify-center"
                           aria-hidden="true"
                         >
                           <div
@@ -1378,9 +1434,11 @@ export default function Home() {
 
                         {FRET_RANGE.map((fret) => {
                           const note = getFretNote(s, fret)
+                          const displayNote = noteDisplayName(note, key, mode)
                           const isActive = active?.fret === fret
-                          const isScaleNote = scaleNotes.has(note)
-                          const isChordNote = chordNotes.has(note)
+                          const notePitch = normalizeNote(note)
+                          const isScaleNote = scaleNotes.has(notePitch)
+                          const isChordNote = chordNotes.has(notePitch)
                           const showNote = showAllNotes || isActive || (highlightScale && isScaleNote) || (highlightChordNotes && isChordNote)
                           const noteMarkerColor = noteColor(note, key)
                           const isFlashing = flashingNoteIds.has(audioNoteId(stringIndex, fret))
@@ -1416,7 +1474,7 @@ export default function Home() {
                                         }`
                                   } ${isFlashing ? "scale-150 brightness-150 ring-4 ring-[#fff8ec] shadow-[0_0_28px_rgba(255,248,236,0.95)]" : ""}`}
                                 >
-                                  {note}
+                                  {displayNote}
                                 </div>
                               )}
                             </div>
@@ -1475,7 +1533,7 @@ export default function Home() {
           <div
             className={`${f ? "flex" : "hidden"} h-11 w-11 items-center justify-center rounded-full bg-[var(--ink)] text-xl font-black leading-none text-[#fff8ec] shadow-sm`}
           >
-            {f ? f.note : "\u2014"}
+            {f ? noteDisplayName(f.note, key, mode) : "\u2014"}
           </div>
         </div>
       </div>
