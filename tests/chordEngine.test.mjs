@@ -26,6 +26,24 @@ new Function("exports", "require", "module", "__filename", "__dirname", outputTe
   dirname(enginePath)
 )
 
+const draftPath = resolve(rootDir, "app/lib/fretboardDraft.ts")
+const draftSource = readFileSync(draftPath, "utf8")
+const { outputText: draftOutputText } = ts.transpileModule(draftSource, {
+  compilerOptions: {
+    module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2020
+  }
+})
+
+const draftModule = { exports: {} }
+new Function("exports", "require", "module", "__filename", "__dirname", draftOutputText)(
+  draftModule.exports,
+  require,
+  draftModule,
+  draftPath,
+  dirname(draftPath)
+)
+
 const {
   analyzeChord,
   buildProgressionCompletion,
@@ -36,12 +54,18 @@ const {
   buildScaleFromMode,
   canNameChord,
   getChordDisplayNotes,
+  getFretNote,
   inferChordSymbol,
   normalizeChordSymbol,
   parseChordSymbol,
   smartStringCountForChord,
   spellNoteForKey
 } = engineModule.exports
+
+const {
+  addDraftFretNote,
+  numericDraftVoicing
+} = draftModule.exports
 
 test("preserves user-facing flat spelling while exposing canonical pitch roots", () => {
   const parsed = parseChordSymbol("Dbmaj7/Ab")
@@ -501,7 +525,9 @@ test("phrase position actively shapes generation and ranking", () => {
   })
   assert.equal(preCadential.phrasePosition, "preCadential")
   assert.equal(preCadential.harmonicNeed, "preparation")
-  assert.equal(preCadentialSuggestions.simple[0], "F")
+  assert.equal(preCadentialSuggestions.simple[0], "G")
+  assert.ok(preCadentialSuggestions.simple.includes("Bdim"))
+  assert.ok(preCadentialSuggestions.complex.includes("Bdim7"))
 
   const loop = analyzeProgressionState({
     progression: ["C", "G", "Am", "F"],
@@ -536,13 +562,16 @@ test("lookahead and voice-leading components are visible in debug scoring", () =
     mode: "Ionian",
     resolveWithin: 4
   })
-  const am = afterC.debug.simple.find(item => item.symbol === "Am")
+  const f = afterC.debug.simple.find(item => item.symbol === "F")
   const dmAfterC = afterC.debug.simple.find(item => item.symbol === "Dm")
   const commonToneRaw = item => item.breakdown.parts.find(part => part.label === "common-note connection").raw
+  const movementRaw = item => item.breakdown.parts.find(part => part.label === "harmonic movement").raw
 
-  assert.ok(am)
+  assert.ok(f)
   assert.ok(dmAfterC)
-  assert.ok(commonToneRaw(am) > commonToneRaw(dmAfterC))
+  assert.ok(commonToneRaw(f) >= commonToneRaw(dmAfterC))
+  assert.ok(movementRaw(f) > 0)
+  assert.ok(movementRaw(dmAfterC) > 0)
 })
 
 test("complex suggestions include color while near-resolution lists keep non-tonic options", () => {
@@ -577,7 +606,9 @@ test("pattern preference helps but does not override harmonic correctness", () =
     mode: "Ionian",
     resolveWithin: 4
   })
-  assert.equal(axis.simple[0], "F")
+  assert.equal(axis.simple[0], "G")
+  assert.ok(axis.simple.indexOf("Bdim") >= 0)
+  assert.ok(axis.simple.indexOf("Bdim") < axis.simple.indexOf("G7"))
 
   const dominant = buildProgressionSuggestions({
     progression: ["G"],
@@ -590,6 +621,56 @@ test("pattern preference helps but does not override harmonic correctness", () =
   assert.ok(![...dominant.simple, ...dominant.complex].includes("F#"))
 })
 
+test("cadential diminished approaches are functional in major and modal contexts", () => {
+  const cMajor = buildProgressionSuggestions({
+    progression: ["C", "G", "Am"],
+    key: "C",
+    mode: "Ionian",
+    resolveWithin: 4
+  })
+  const bdim = cMajor.debug.simple.find(item => item.symbol === "Bdim")
+  const bdim7 = cMajor.debug.complex.find(item => item.symbol === "Bdim7")
+
+  assert.ok(bdim)
+  assert.ok(bdim7)
+  assert.equal(bdim.role, "leadingTone")
+  assert.equal(bdim.resolvesTo.targetRoot, "C")
+
+  const gMajor = buildProgressionSuggestions({
+    progression: ["G", "D", "Em"],
+    key: "G",
+    mode: "Ionian",
+    resolveWithin: 4
+  })
+  assert.ok(gMajor.simple.includes("F#dim"))
+  assert.ok(gMajor.complex.includes("F#dim7"))
+
+  const aAeolian = buildProgressionSuggestions({
+    progression: ["Am", "E", "F"],
+    key: "A",
+    mode: "Aeolian",
+    resolveWithin: 4
+  })
+  assert.ok(aAeolian.simple.includes("G#dim"))
+  assert.ok(aAeolian.complex.includes("G#dim7"))
+})
+
+test("repeated stable harmony is steered toward movement instead of near clones", () => {
+  const repeated = buildProgressionSuggestions({
+    progression: ["C", "C", "C"],
+    key: "C",
+    mode: "Ionian",
+    resolveWithin: 4
+  })
+  const firstThree = repeated.simple.slice(0, 3)
+
+  assert.equal(repeated.simple[0], "G")
+  assert.ok(firstThree.every(symbol => parseChordSymbol(symbol)?.root !== "C"))
+  assert.ok(repeated.debug.simple[0].breakdown.parts.some(part => {
+    return part.label === "harmonic movement" && part.weighted > 0
+  }))
+})
+
 test("progression completion keeps input fixed and follows the functional path", () => {
   const cf = buildProgressionCompletion({
     progression: ["C", "F"],
@@ -598,7 +679,7 @@ test("progression completion keeps input fixed and follows the functional path",
     resolveWithin: 4
   })
   assert.deepEqual(cf.fixedInput, ["C", "F"])
-  assert.deepEqual(cf.suggestedContinuation, ["G", "C"])
+  assert.deepEqual(cf.suggestedContinuation, ["G7", "C"])
   assert.equal(cf.finalResolvesToTonic, true)
 
   const iiV = buildProgressionCompletion({
@@ -615,7 +696,7 @@ test("progression completion keeps input fixed and follows the functional path",
     mode: "Ionian",
     resolveWithin: 4
   })
-  assert.deepEqual(applied.suggestedContinuation, ["Dm", "G", "C"])
+  assert.deepEqual(applied.suggestedContinuation, ["Dm", "G7", "C"])
 
   const vamp = buildProgressionCompletion({
     progression: ["C", "G", "Am"],
@@ -623,8 +704,55 @@ test("progression completion keeps input fixed and follows the functional path",
     mode: "Ionian",
     resolveWithin: 4
   })
-  assert.deepEqual(vamp.suggestedContinuation, ["F"])
-  assert.equal(vamp.finalTonicBehavior, "loopingOpen")
+  assert.deepEqual(vamp.suggestedContinuation, ["Bdim", "C"])
+  assert.equal(vamp.finalTonicBehavior, "resolvedToTonic")
+})
+
+test("draft fretboard helper preserves open strings from muted-string drops", () => {
+  const tuning = ["E", "A", "D", "G", "B", "E"]
+  const shapes = [
+    {
+      chord: "C",
+      drops: [[1, 3], [2, 2], [3, 0], [4, 1], [5, 0]]
+    },
+    {
+      chord: "G",
+      drops: [[0, 3], [1, 2], [2, 0], [3, 0], [4, 0], [5, 3]]
+    },
+    {
+      chord: "D",
+      drops: [[2, 0], [3, 2], [4, 3], [5, 2]]
+    },
+    {
+      chord: "Em",
+      drops: [[0, 0], [1, 2], [2, 2], [3, 0], [4, 0], [5, 0]]
+    }
+  ]
+
+  for(const shape of shapes) {
+    let voicing = []
+    for(const [stringIndex, fret] of shape.drops) {
+      const next = addDraftFretNote({
+        voicing,
+        tuning,
+        stringIndex,
+        fret,
+        noteForFret: getFretNote
+      })
+      assert.ok(next, `${shape.chord} should accept string ${stringIndex} fret ${fret}`)
+      voicing = next
+    }
+
+    const openFrets = shape.drops
+      .filter(([, fret]) => fret === 0)
+      .length
+    const numeric = numericDraftVoicing(voicing)
+
+    assert.equal(numeric.length, voicing.length)
+    assert.equal(numeric.filter(entry => entry.fret === 0).length, openFrets)
+    assert.equal(canNameChord(voicing.map(entry => entry.note), shape.chord.replace(/m$/, ""), "Ionian"), true)
+    assert.equal(inferChordSymbol(voicing.map(entry => entry.note), shape.chord.replace(/m$/, ""), "Ionian"), shape.chord)
+  }
 })
 
 test("infers major and minor triads correctly", () => {

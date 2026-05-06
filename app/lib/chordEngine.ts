@@ -306,29 +306,32 @@ const SCORE_CONFIG = {
       musicalRejection: { tier: "hardConstraints" as const, weight: 0, scale: 1 },
       guitarVoicingFeasibility: { tier: "playability" as const, weight: 10, scale: 80 },
       guitarVoicingBalance: { tier: "playability" as const, weight: 8, scale: 70 },
-      targetMotion: { tier: "harmonicCorrectness" as const, weight: 18, scale: 60 },
+      targetMotion: { tier: "harmonicCorrectness" as const, weight: 22, scale: 60 },
       qualityFit: { tier: "harmonicCorrectness" as const, weight: 12, scale: 12 },
-      voiceLeading: { tier: "harmonicCorrectness" as const, weight: 14, scale: 70 },
-      tendencyResolution: { tier: "harmonicCorrectness" as const, weight: 18, scale: 100 },
+      voiceLeading: { tier: "harmonicCorrectness" as const, weight: 9, scale: 70 },
+      tendencyResolution: { tier: "harmonicCorrectness" as const, weight: 22, scale: 100 },
       inKeyAffinity: { tier: "harmonicCorrectness" as const, weight: 9, scale: 32 },
       chromaticPull: { tier: "harmonicCorrectness" as const, weight: 12, scale: 80 },
       fixedTonicRelation: { tier: "harmonicCorrectness" as const, weight: 14, scale: 80 },
       functionalRole: { tier: "harmonicCorrectness" as const, weight: 22, scale: 140 },
-      functionalNeed: { tier: "harmonicCorrectness" as const, weight: 24, scale: 100 },
-      resolutionIntent: { tier: "harmonicCorrectness" as const, weight: 18, scale: 90 },
-      resolutionRoute: { tier: "harmonicCorrectness" as const, weight: 24, scale: 100 },
-      lookaheadResolution: { tier: "harmonicCorrectness" as const, weight: 28, scale: 120 },
-      harmonicNeedFit: { tier: "harmonicCorrectness" as const, weight: 22, scale: 100 },
-      phraseFunction: { tier: "harmonicCorrectness" as const, weight: 20, scale: 90 },
-      tensionManagement: { tier: "harmonicCorrectness" as const, weight: 18, scale: 90 },
-      cadenceBehavior: { tier: "harmonicCorrectness" as const, weight: 22, scale: 100 },
-      commonToneConnection: { tier: "preference" as const, weight: 12, scale: 36 },
-      patternMatch: { tier: "preference" as const, weight: 24, scale: 140 },
+      functionalNeed: { tier: "harmonicCorrectness" as const, weight: 28, scale: 100 },
+      resolutionIntent: { tier: "harmonicCorrectness" as const, weight: 24, scale: 90 },
+      resolutionRoute: { tier: "harmonicCorrectness" as const, weight: 30, scale: 100 },
+      lookaheadResolution: { tier: "harmonicCorrectness" as const, weight: 32, scale: 120 },
+      harmonicNeedFit: { tier: "harmonicCorrectness" as const, weight: 26, scale: 100 },
+      phraseFunction: { tier: "harmonicCorrectness" as const, weight: 24, scale: 90 },
+      tensionManagement: { tier: "harmonicCorrectness" as const, weight: 22, scale: 90 },
+      cadenceBehavior: { tier: "harmonicCorrectness" as const, weight: 30, scale: 100 },
+      harmonicMovement: { tier: "harmonicCorrectness" as const, weight: 18, scale: 90 },
+      nearClonePenalty: { tier: "harmonicCorrectness" as const, weight: 16, scale: 80 },
+      cadentialLeadingTone: { tier: "harmonicCorrectness" as const, weight: 20, scale: 90 },
+      commonToneConnection: { tier: "preference" as const, weight: 6, scale: 36 },
+      patternMatch: { tier: "preference" as const, weight: 20, scale: 140 },
       phrasePosition: { tier: "preference" as const, weight: 8, scale: 28 },
-      familyPriority: { tier: "preference" as const, weight: 12, scale: 60 },
-      sentenceCompletion: { tier: "preference" as const, weight: 20, scale: 110 },
+      familyPriority: { tier: "preference" as const, weight: 10, scale: 60 },
+      sentenceCompletion: { tier: "preference" as const, weight: 18, scale: 110 },
       bassMotion: { tier: "preference" as const, weight: 8, scale: 90 },
-      sameRootColor: { tier: "preference" as const, weight: 5, scale: 18 },
+      sameRootColor: { tier: "preference" as const, weight: 3, scale: 18 },
       recentSymbolPenalty: { tier: "preference" as const, weight: 18, scale: 60 },
       recentRootPenalty: { tier: "preference" as const, weight: 6, scale: 8 }
     }
@@ -2073,8 +2076,11 @@ function isSimpleSuggestionQuality(type: Quality) {
   return type === "maj" || type === "m" || type === "7" || type === "sus2" || type === "sus4"
 }
 
-function isSimpleSuggestionCandidate(candidate: ProgressionSuggestionCandidate) {
-  return !candidate.bass && isSimpleSuggestionQuality(candidate.type)
+function isSimpleSuggestionCandidate(candidate: ProgressionSuggestionCandidate, state?: ProgressionState) {
+  return !candidate.bass && (
+    isSimpleSuggestionQuality(candidate.type) ||
+    Boolean(state && isCadentialSimpleDiminishedCandidate(candidate, state))
+  )
 }
 
 function isPlainTriadSuggestion(candidate: ProgressionSuggestionCandidate) {
@@ -2083,6 +2089,12 @@ function isPlainTriadSuggestion(candidate: ProgressionSuggestionCandidate) {
 
 function isSimpleColorSuggestion(candidate: ProgressionSuggestionCandidate) {
   return candidate.type === "7" || candidate.type === "sus2" || candidate.type === "sus4"
+}
+
+function isCadentialSimpleDiminishedCandidate(candidate: ProgressionSuggestionCandidate, state: ProgressionState) {
+  return !candidate.bass &&
+    candidate.type === "dim" &&
+    isCadentialLeadingToneCandidate(candidate, state)
 }
 
 function scaleDegreeForRoot(root: string, scale: string[]) {
@@ -3891,6 +3903,169 @@ function fixedTonicRelationScoreForState(candidate: ProgressionSuggestionCandida
   return score
 }
 
+function pitchSetSimilarity(fromNotes: string[], toNotes: string[]) {
+  const from = uniquePitches(fromNotes)
+  const to = uniquePitches(toNotes)
+  if(from.length === 0 && to.length === 0) return 1
+  if(from.length === 0 || to.length === 0) return 0
+
+  const toSet = new Set(to)
+  const shared = from.filter(note => toSet.has(note)).length
+  const union = new Set([...from, ...to]).size
+
+  return union === 0 ? 0 : shared / union
+}
+
+function candidateBassNote(candidate: Pick<ProgressionSuggestionCandidate, "bass" | "root">) {
+  return candidate.bass ?? candidate.root
+}
+
+function isProlongationContext(state?: ProgressionState) {
+  return Boolean(
+    state &&
+    (state.harmonicNeed === "prolongation" ||
+      state.phrasePosition === "postCadentialRelease" ||
+      state.phrasePosition === "loopingVamp")
+  )
+}
+
+function candidateProvidesDirectedFunction(candidate: ProgressionSuggestionCandidate, state?: ProgressionState) {
+  if(state && resolvesCurrentTension(candidate, state)) return true
+  if(candidate.functionCategory === "predominant" || candidate.functionCategory === "borrowedPredominant") return true
+  if(candidate.functionCategory === "dominant" || candidate.functionCategory === "secondaryDominant") return true
+  if(candidate.functionCategory === "leadingTone" || candidate.functionCategory === "borrowedDominant") return true
+  if(candidate.functionCategory === "approachChord" || candidate.functionCategory === "passingChord") return true
+  return false
+}
+
+function nearClonePenaltyScore(
+  candidate: ProgressionSuggestionCandidate,
+  progression: ParsedProgressionChord[],
+  state?: ProgressionState
+) {
+  const last = progression[progression.length - 1]
+  if(!last) return 0
+
+  const similarity = pitchSetSimilarity(last.notes, candidate.notes)
+  const sameRoot = samePitch(candidate.root, last.parsed.root)
+  const sameType = candidate.type === last.parsed.type
+  const sameBass = samePitch(candidateBassNote(candidate), bassNoteForParsed(last.parsed))
+  const prolonging = isProlongationContext(state) ||
+    (candidate.family === "prolongation" && state?.harmonicNeed === "stability")
+  let penalty = 0
+
+  if(similarity >= 0.86) penalty -= sameRoot ? 76 : 48
+  else if(similarity >= 0.72 && sameRoot) penalty -= 46
+  else if(similarity >= 0.72 && sameBass && candidate.bass) penalty -= 24
+
+  if(sameRoot && sameType && sameBass) penalty -= 32
+  if(candidate.bass && sameRoot && similarity >= 0.62) penalty -= 18
+
+  if(candidateProvidesDirectedFunction(candidate, state)) penalty *= 0.45
+  if(prolonging) penalty *= 0.3
+  if(state?.context.resolutionDue && samePitch(candidate.root, state.tonicRoot) && isStableRole(candidate.functionCategory)) {
+    penalty *= 0.2
+  }
+
+  return penalty
+}
+
+function harmonicMovementScore(
+  candidate: ProgressionSuggestionCandidate,
+  progression: ParsedProgressionChord[],
+  state?: ProgressionState
+) {
+  const last = progression[progression.length - 1]
+  const prolonging = isProlongationContext(state)
+  let score = 0
+
+  if(!last) {
+    if(state && samePitch(candidate.root, state.tonicRoot) && isStableRole(candidate.functionCategory)) score += 24
+    if(isTensionBearingRole(candidate.functionCategory)) score -= 18
+    return score
+  }
+
+  const rootMotion = semitoneDistance(last.parsed.root, candidate.root)
+  const bassMotion = semitoneDistance(bassNoteForParsed(last.parsed), candidateBassNote(candidate))
+
+  if(rootMotion === 0) score += prolonging ? 4 : -24
+  else if(rootMotion === 5 || rootMotion === 7) score += 28
+  else if(rootMotion <= 2) score += 20
+  else if(rootMotion <= 4) score += 12
+
+  if(bassMotion === 1) score += 18
+  else if(bassMotion === 2) score += 14
+  else if(bassMotion === 0 && !prolonging) score -= 12
+
+  if(!state) return score
+
+  if(resolvesCurrentTension(candidate, state)) score += 76
+
+  if(state.phrasePosition === "preCadential") {
+    if(candidate.functionCategory === "dominant" || candidate.functionCategory === "leadingTone") score += 62
+    else if(candidate.functionCategory === "secondaryDominant") score += samePitch(candidate.resolutionTarget.targetRoot, state.targetChord.targetRoot) ? 58 : 30
+    else if(candidate.functionCategory === "predominant" || candidate.functionCategory === "borrowedPredominant") score += 28
+    else if(isStableRole(candidate.functionCategory)) score -= 30
+  }
+
+  if(state.phrasePosition === "cadential" || state.context.resolutionDue) {
+    if(samePitch(candidate.root, state.targetChord.targetRoot) && isStableRole(candidate.functionCategory)) score += 70
+    else if(isTensionBearingRole(candidate.functionCategory)) score -= 80
+  }
+
+  if(state.harmonicNeed === "movement") {
+    if(candidate.functionCategory === "predominant" || candidate.functionCategory === "borrowedPredominant") score += 42
+    if(candidate.functionCategory === "dominant" && state.remainingSlotsToResolution >= 2) score += 24
+    if(isStableRole(candidate.functionCategory) && rootMotion === 0) score -= 34
+  }
+
+  if(state.harmonicNeed === "preparation") {
+    if(candidate.functionCategory === "predominant" || candidate.functionCategory === "borrowedPredominant") score += 44
+    if(candidate.functionCategory === "dominant" || candidate.functionCategory === "secondaryDominant" || candidate.functionCategory === "leadingTone") score += 34
+    if(isStableRole(candidate.functionCategory)) score -= 24
+  }
+
+  if(state.harmonicNeed === "tension") {
+    if(candidate.functionCategory === "dominant" || candidate.functionCategory === "leadingTone") score += 64
+    if(candidate.functionCategory === "secondaryDominant") score += 44
+    if(isStableRole(candidate.functionCategory)) score -= 46
+  }
+
+  return score
+}
+
+function isCadentialLeadingToneCandidate(candidate: ProgressionSuggestionCandidate, state: ProgressionState) {
+  if(candidate.functionCategory !== "leadingTone") return false
+  if(!isDiminishedQuality(candidate.type)) return false
+  if(!candidateHasValidResolutionRoute(candidate, state)) return false
+
+  const targetMatchesActiveRoute =
+    samePitch(candidate.resolutionTarget.targetRoot, state.targetChord.targetRoot) ||
+    samePitch(candidate.resolutionTarget.targetRoot, state.tonicRoot)
+  const nearCadence =
+    state.remainingSlotsToResolution <= 2 ||
+    state.phrasePosition === "preCadential" ||
+    state.phrasePosition === "cadential"
+
+  return targetMatchesActiveRoute && nearCadence
+}
+
+function cadentialLeadingToneScoreForState(candidate: ProgressionSuggestionCandidate, state: ProgressionState) {
+  if(candidate.functionCategory !== "leadingTone") return 0
+  if(state.context.resolutionDue || state.phrasePosition === "cadential") return -76
+  if(!isCadentialLeadingToneCandidate(candidate, state)) return -12
+
+  let score = 54
+  if(candidate.type === "dim7") score += 18
+  if(candidate.type === "dim") score += 10
+  if(state.phrasePosition === "preCadential") score += 32
+  if(state.remainingSlotsToResolution <= 2) score += 24
+  if(samePitch(candidate.resolutionTarget.targetRoot, state.tonicRoot)) score += 16
+  if(state.context.currentChord && isStableRole(state.context.currentChord.role)) score += 10
+
+  return score
+}
+
 function commonToneConnectionScore(
   candidate: ProgressionSuggestionCandidate,
   progression: ParsedProgressionChord[],
@@ -3901,11 +4076,14 @@ function commonToneConnectionScore(
 
   const common = commonPitches(last.notes, candidate.notes)
   const metrics = voiceLeadingMetrics(last.notes, candidate.notes)
-  let score = common.length * 12 + metrics.stepwiseCount * 5 - metrics.largeLeapCount * 12
+  const supportsFunction = candidateProvidesDirectedFunction(candidate, state) ||
+    Boolean(state && samePitch(candidate.root, state.targetChord.targetRoot) && isStableRole(candidate.functionCategory))
+  let score = common.length * 7 + metrics.stepwiseCount * 4 - metrics.largeLeapCount * 10
 
-  if(common.length >= 2) score += 10
+  if(common.length >= 2 && supportsFunction) score += 8
+  if(common.length >= 2 && !supportsFunction && !isProlongationContext(state)) score -= common.length * 10
   if(state?.context.currentChord && isTensionBearingRole(state.context.currentChord.role) && !resolvesCurrentTension(candidate, state)) {
-    score -= 24
+    score -= 32
   }
 
   return score
@@ -3994,6 +4172,7 @@ function harmonicNeedFitScoreForState(candidate: ProgressionSuggestionCandidate,
     case "preparation":
       if(candidate.functionCategory === "predominant" || candidate.functionCategory === "borrowedPredominant") return 74
       if(candidate.functionCategory === "dominant" || candidate.functionCategory === "secondaryDominant") return 42
+      if(isCadentialLeadingToneCandidate(candidate, state)) return 54
       if(isStableRole(candidate.functionCategory)) return -18
       return 6
     case "tension":
@@ -4043,11 +4222,13 @@ function candidateFitsHarmonicNeed(candidate: ProgressionSuggestionCandidate, st
     case "movement":
       return candidate.inKey ||
         candidate.functionCategory === "borrowedPredominant" ||
+        isCadentialLeadingToneCandidate(candidate, state) ||
         (complex && candidate.functionCategory === "secondaryDominant" && candidateHasValidResolutionRoute(candidate, state))
     case "preparation":
       return candidate.functionCategory === "predominant" ||
         candidate.functionCategory === "borrowedPredominant" ||
         candidate.functionCategory === "dominant" ||
+        isCadentialLeadingToneCandidate(candidate, state) ||
         (complex && candidate.functionCategory === "secondaryDominant")
     case "tension":
       return candidate.functionCategory === "dominant" ||
@@ -4646,24 +4827,22 @@ function buildCadentialProgressionCandidates(
     )
   }
 
-  if(complex) {
-    for(const quality of ["dim", "dim7", "m7b5"] as Quality[]) {
-      addCandidate(
-        candidates,
-        seen,
-        symbolForQuality(leadingRoot, quality, undefined, key, mode),
-        cleanTargetRoot,
-        scale,
-        scaleSet,
-        mode,
-        plan,
-        phrasePosition,
-        key,
-        "leadingTone",
-        ["leading-tone sonority gives cadential pull"],
-        ["cadential"]
-      )
-    }
+  for(const quality of (complex ? ["dim", "dim7", "m7b5"] : ["dim"]) as Quality[]) {
+    addCandidate(
+      candidates,
+      seen,
+      symbolForQuality(leadingRoot, quality, undefined, key, mode),
+      cleanTargetRoot,
+      scale,
+      scaleSet,
+      mode,
+      plan,
+      phrasePosition,
+      key,
+      "leadingTone",
+      ["leading-tone sonority gives cadential pull"],
+      ["cadential"]
+    )
   }
 
   for(const root of predominantRoots) {
@@ -4932,6 +5111,8 @@ function scoreProgressionCandidates(
     add("targetMotion", targetDegree >= 0 ? targetScores[targetDegree] : 12, "expected target motion")
     add("qualityFit", qualityWeight(candidate.type, complex), "quality fit for suggestion bucket")
     add("voiceLeading", leadingMetrics ? leadingMetrics.score : 0, "voice leading: common notes and stepwise motion")
+    add("harmonicMovement", harmonicMovementScore(candidate, actualProgression, state), "harmonic movement")
+    add("nearClonePenalty", nearClonePenaltyScore(candidate, actualProgression, state), "avoid near-clone continuation")
 
     if(candidate.inKey && rootDegree >= 0) add("inKeyAffinity", targetScores[rootDegree], "in-key root affinity")
     if(!candidate.inKey) add("chromaticPull", leadingTonePullScore(candidate, scale, scaleSet), "chromatic pull")
@@ -4939,6 +5120,7 @@ function scoreProgressionCandidates(
       add("tendencyResolution", tendencyResolutionScoreForState(candidate, state), "tendency-tone resolution")
       add("fixedTonicRelation", fixedTonicRelationScoreForState(candidate, state), "fixed tonic relationship")
       add("functionalNeed", functionalNeedScoreForState(candidate, state), "current functional need")
+      add("cadentialLeadingTone", cadentialLeadingToneScoreForState(candidate, state), "cadential leading-tone pull")
     }
     add("functionalRole", functionalRaw, "functional role fit")
     add("resolutionIntent", resolutionIntentScore(candidate, resolutionPlan, scale), "resolution timing")
@@ -5052,7 +5234,7 @@ function pickByKeyStatus(candidates: ProgressionSuggestionCandidate[], inKey: bo
     if(picked.length === count) return picked
   }
 
-  return picked
+  return picked.slice(0, count)
 }
 
 function pickTopScoredCandidate(candidates: ProgressionSuggestionCandidate[], used: Set<string>) {
@@ -5090,7 +5272,7 @@ function pickScoredSuggestionCategory(
     }
   }
 
-  return picked
+  return picked.slice(0, count)
 }
 
 function pickFilteredSuggestions(
@@ -5111,10 +5293,11 @@ function pickFilteredSuggestions(
   return picked
 }
 
-function pickSimpleSuggestions(candidates: ProgressionSuggestionCandidate[], count: number) {
+function pickSimpleSuggestions(candidates: ProgressionSuggestionCandidate[], count: number, state: ProgressionState) {
   const used = new Set<string>()
   const picked = [
     ...pickFilteredSuggestions(candidates, 3, used, candidate => candidate.inKey && isPlainTriadSuggestion(candidate)),
+    ...pickFilteredSuggestions(candidates, 1, used, candidate => isCadentialSimpleDiminishedCandidate(candidate, state)),
     ...pickFilteredSuggestions(candidates, 2, used, candidate => candidate.inKey && isSimpleColorSuggestion(candidate))
   ]
 
@@ -5141,11 +5324,11 @@ function pickSimpleSuggestions(candidates: ProgressionSuggestionCandidate[], cou
       candidates,
       count - picked.length,
       used,
-      isSimpleSuggestionCandidate
+      candidate => isSimpleSuggestionCandidate(candidate, state)
     ))
   }
 
-  return picked
+  return picked.slice(0, count)
 }
 
 function isExtendedOrAlteredQuality(type: Quality) {
@@ -5179,8 +5362,40 @@ function isTonicVariantCandidate(candidate: ProgressionSuggestionCandidate, stat
       candidate.family === "prolongation")
 }
 
+function harmonicCorrectnessTotal(candidate: ProgressionSuggestionCandidate) {
+  return candidate.scoreBreakdown?.tiers.harmonicCorrectness ?? 0
+}
+
+function isProtectedFunctionalCandidate(
+  candidate: ProgressionSuggestionCandidate,
+  state: ProgressionState,
+  topHarmonicCorrectness: number
+) {
+  const closeToTop = harmonicCorrectnessTotal(candidate) >= topHarmonicCorrectness - 12
+  if(resolvesCurrentTension(candidate, state)) return closeToTop && !candidate.bass
+  if(candidate.family === "cadential" && closeToTop) return true
+  if(isCadentialLeadingToneCandidate(candidate, state) && closeToTop) return true
+  if(state.phrasePosition === "preCadential" && isTensionBearingRole(candidate.functionCategory) && closeToTop) return true
+  if(state.context.resolutionDue && samePitch(candidate.root, state.targetChord.targetRoot) && isStableRole(candidate.functionCategory)) return closeToTop && !candidate.bass
+  return false
+}
+
+function isNearCloneOfPicked(candidate: ProgressionSuggestionCandidate, picked: ProgressionSuggestionCandidate[]) {
+  return picked.some(item => {
+    const similarity = pitchSetSimilarity(candidate.notes, item.notes)
+    const sameRoot = samePitch(candidate.root, item.root)
+    const sameFunction = candidate.functionCategory === item.functionCategory
+    const sameBass = samePitch(candidateBassNote(candidate), candidateBassNote(item))
+
+    return similarity >= 0.86 ||
+      (sameRoot && similarity >= 0.62) ||
+      (sameFunction && sameBass && similarity >= 0.72)
+  })
+}
+
 function pickComplexSuggestions(candidates: ProgressionSuggestionCandidate[], count: number, state: ProgressionState) {
   const picked: string[] = []
+  const pickedCandidates: ProgressionSuggestionCandidate[] = []
   const used = new Set<string>()
   const nearResolution = state.remainingSlotsToResolution <= 2 ||
     state.phrasePosition === "preCadential" ||
@@ -5190,16 +5405,26 @@ function pickComplexSuggestions(candidates: ProgressionSuggestionCandidate[], co
   let tonicCount = 0
   const rootCounts = new Map<string, number>()
   const rootLimit = 2
+  const topHarmonicCorrectness = candidates[0] ? harmonicCorrectnessTotal(candidates[0]) : 0
 
-  const canAdd = (candidate: ProgressionSuggestionCandidate, enforceTonicLimit = true) => {
+  const canAdd = (candidate: ProgressionSuggestionCandidate, enforceDiversity = true) => {
     if(used.has(candidate.symbol)) return false
-    if(enforceTonicLimit && isTonicVariantCandidate(candidate, state) && tonicCount >= tonicLimit) return false
-    if(enforceTonicLimit && (rootCounts.get(candidate.root) ?? 0) >= rootLimit) return false
+    const protectedFunction = isProtectedFunctionalCandidate(candidate, state, topHarmonicCorrectness)
+    const insideDisplayBand = candidate.score >= (candidates[0]?.score ?? candidate.score) - 18
+
+    if(enforceDiversity && !protectedFunction) {
+      if(isTonicVariantCandidate(candidate, state) && tonicCount >= tonicLimit) return false
+      if((rootCounts.get(candidate.root) ?? 0) >= rootLimit) return false
+      if(candidate.bass && pickedCandidates.some(item => item.bass)) return false
+      if(insideDisplayBand && isNearCloneOfPicked(candidate, pickedCandidates)) return false
+    }
+
     return true
   }
-  const addCandidate = (candidate: ProgressionSuggestionCandidate | undefined, enforceTonicLimit = true) => {
-    if(!candidate || !canAdd(candidate, enforceTonicLimit)) return false
+  const addCandidate = (candidate: ProgressionSuggestionCandidate | undefined, enforceDiversity = true) => {
+    if(!candidate || !canAdd(candidate, enforceDiversity)) return false
     picked.push(candidate.symbol)
+    pickedCandidates.push(candidate)
     used.add(candidate.symbol)
     if(isTonicVariantCandidate(candidate, state)) tonicCount += 1
     rootCounts.set(candidate.root, (rootCounts.get(candidate.root) ?? 0) + 1)
@@ -5420,7 +5645,7 @@ export function buildProgressionSuggestions({
     progressionState,
     false,
     fallback
-  ).filter(isSimpleSuggestionCandidate)
+  ).filter(candidate => isSimpleSuggestionCandidate(candidate, progressionState))
 
   const complexCandidates = rankProgressionCandidates(
     complexBaseCandidates,
@@ -5441,7 +5666,7 @@ export function buildProgressionSuggestions({
   const debugCandidatePool = uniqueProgressionCandidates([...complexCandidates, ...simpleCandidates])
 
   if(resolutionPlan.resolutionDue) {
-    const simple = pickSimpleSuggestions(simpleCandidates, 5)
+    const simple = pickSimpleSuggestions(simpleCandidates, 5, progressionState)
     const complex = pickComplexSuggestions(complexDisplayCandidates, 5, progressionState)
     const best = bestDebugFromTopDisplayedSuggestions({
       simple,
@@ -5461,7 +5686,7 @@ export function buildProgressionSuggestions({
     }
   }
 
-  const simple = pickSimpleSuggestions(simpleCandidates, 5)
+  const simple = pickSimpleSuggestions(simpleCandidates, 5, progressionState)
 
   const complex = pickComplexSuggestions(complexDisplayCandidates, 5, progressionState)
   const best = bestDebugFromTopDisplayedSuggestions({
@@ -5482,8 +5707,37 @@ export function buildProgressionSuggestions({
   }
 }
 
+function completionAdjustedScore(item: ProgressionSuggestionDebug) {
+  const parsed = parse(item.symbol)
+  let score = item.score
+
+  if(parsed.bass) score -= 42
+  if(parsed.type === "maj7" || parsed.type === "6" || parsed.type === "add9" || parsed.type === "6add9" || parsed.type === "maj9") score -= 16
+  if(parsed.type === "m7" || parsed.type === "m6" || parsed.type === "madd9" || parsed.type === "m9" || parsed.type === "m11") score -= 10
+  if(parsed.type === "m7b5") score -= 16
+  if(parsed.type === "7sus2" || parsed.type === "7sus4" || parsed.type === "9" || parsed.type === "11" || parsed.type === "13") score -= 8
+  if(item.family === "prolongation" && parsed.bass) score -= 12
+  if(item.role === "tonic" && (parsed.type === "maj" || parsed.type === "m")) score += 8
+  if(item.role === "dominant" && parsed.type === "7") score += 6
+  if(item.role === "leadingTone" && (parsed.type === "dim" || parsed.type === "dim7")) score += 8
+
+  return score
+}
+
 function completionCandidateFromSuggestions(suggestions: ProgressionSuggestionSet) {
-  return suggestions.simple[0] ?? suggestions.complex[0] ?? null
+  const debugItems = [
+    ...(suggestions.debug?.simple ?? []),
+    ...(suggestions.debug?.complex ?? [])
+  ]
+  const rankedDebugItems = debugItems
+    .filter((item, index, arr) => arr.findIndex(other => other.symbol === item.symbol) === index)
+    .sort((a, b) => {
+      const adjusted = completionAdjustedScore(b) - completionAdjustedScore(a)
+      if(adjusted !== 0) return adjusted
+      return b.score - a.score
+    })
+
+  return rankedDebugItems[0]?.symbol ?? suggestions.best?.symbol ?? suggestions.simple[0] ?? suggestions.complex[0] ?? null
 }
 
 function tonicBehaviorForCompletion(state: ProgressionState): ProgressionCompletion["finalTonicBehavior"] {

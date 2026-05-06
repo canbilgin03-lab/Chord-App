@@ -26,6 +26,10 @@ import {
   type SuggestionDebugItem
 } from '@/app/lib/suggestionPresentation'
 import {
+  addDraftFretNote,
+  sortVoicingByString
+} from '@/app/lib/fretboardDraft'
+import {
   buildPatternTimeline,
   getChordEndDelay,
   getStringSpan,
@@ -493,10 +497,6 @@ export default function Home() {
   const progressionPlayingRef = useRef(false)
   const progressionLoopingRef = useRef(true)
 
-  function sortVoicingByString(voicing: VoicingItem[]) {
-    return [...voicing].sort((a, b) => a.string - b.string)
-  }
-
   function voicingPositionKey(voicing: VoicingItem[]) {
     return JSON.stringify(sortVoicingByString(voicing).map(entry => [entry.string, entry.fret]))
   }
@@ -571,7 +571,9 @@ export default function Home() {
   }
 
   function getCurrentVoicing(item: ProgressionItem) {
-    return voicings[voicingIndex] ?? getPinnedCustomVoicing(item)
+    const pinned = getPinnedCustomVoicing(item)
+    if(pinned && (item.customVoicingIndex ?? item.voicingIndex ?? 0) === voicingIndex) return pinned
+    return voicings[voicingIndex] ?? pinned
   }
 
   function inferChordFromVoicing(newVoicing: VoicingItem[]) {
@@ -648,14 +650,15 @@ export default function Home() {
       const targetHasNote = draggedNote.string !== targetString && currentVoicing.some(entry => entry.string === targetString)
       if (targetHasNote) return "forbidden"
 
-      const targetNote = getFretNote(STRINGS[targetString], targetFret)
-      const updatedVoicing = currentVoicing.filter(entry => entry.string !== draggedNote.string)
-      updatedVoicing.push({
-        string: targetString,
+      const updatedVoicing = addDraftFretNote<VoicingItem>({
+        voicing: currentVoicing.filter(entry => entry.string !== draggedNote.string),
+        tuning: STRINGS,
+        stringIndex: targetString,
         fret: targetFret,
-        note: targetNote,
-        role: draggedNote.role
+        role: draggedNote.role,
+        noteForFret: getFretNote
       })
+      if(!updatedVoicing) return "forbidden"
 
       if(isDraftFretboardActive()) return "allowed"
 
@@ -669,14 +672,15 @@ export default function Home() {
       const targetHasNote = currentVoicing.some(entry => entry.string === targetString)
       if (targetHasNote) return "forbidden"
 
-      const targetNote = getFretNote(STRINGS[targetString], targetFret)
-      const updatedVoicing = [...currentVoicing]
-      updatedVoicing.push({
-        string: targetString,
+      const updatedVoicing = addDraftFretNote<VoicingItem>({
+        voicing: currentVoicing,
+        tuning: STRINGS,
+        stringIndex: targetString,
         fret: targetFret,
-        note: targetNote,
-        role: "1"
+        role: "1",
+        noteForFret: getFretNote
       })
+      if(!updatedVoicing) return "forbidden"
 
       if(isDraftFretboardActive()) return "allowed"
 
@@ -687,9 +691,26 @@ export default function Home() {
   }
 
   function getStringPreviewState(targetString: number) {
+    const currentVoicing = currentEditableVoicing()
+
+    if (draggedMutedString !== null) {
+      if (draggedMutedString !== targetString) return "forbidden"
+      const updatedVoicing = addDraftFretNote<VoicingItem>({
+        voicing: currentVoicing,
+        tuning: STRINGS,
+        stringIndex: targetString,
+        fret: 0,
+        role: "1",
+        noteForFret: getFretNote
+      })
+      if(!updatedVoicing) return "forbidden"
+      if(isDraftFretboardActive()) return "allowed"
+      if (updatedVoicing.length < 3) return "forbidden"
+      return canApplyVoicing(updatedVoicing) ? "allowed" : "forbidden"
+    }
+
     if (!draggedNote) return
     if (draggedNote.string !== targetString) return
-    const currentVoicing = currentEditableVoicing()
 
     const updatedVoicing = currentVoicing.filter(entry => entry.string !== draggedNote.string)
     if(isDraftFretboardActive()) return "allowed"
@@ -738,18 +759,19 @@ export default function Home() {
       return
     }
 
-    const targetNote = getFretNote(STRINGS[targetString], targetFret)
-    const updatedVoicing = currentVoicing
-      .filter(entry => entry.string !== draggedNote.string)
-
-    updatedVoicing.push({
-      string: targetString,
+    const updatedVoicing = addDraftFretNote<VoicingItem>({
+      voicing: currentVoicing.filter(entry => entry.string !== draggedNote.string),
+      tuning: STRINGS,
+      stringIndex: targetString,
       fret: targetFret,
-      note: targetNote,
-      role: draggedNote.role
+      role: draggedNote.role,
+      noteForFret: getFretNote
     })
+    if(!updatedVoicing) {
+      setDraggedNote(null)
+      return
+    }
 
-    updatedVoicing.sort((a, b) => a.string - b.string)
     if (isDraftFretboardActive()) {
       updateDraftVoicing(updatedVoicing)
     } else if (canApplyVoicing(updatedVoicing)) {
@@ -797,17 +819,19 @@ export default function Home() {
       return
     }
 
-    const targetNote = getFretNote(STRINGS[targetString], targetFret)
-    const updatedVoicing = [...currentVoicing]
-
-    updatedVoicing.push({
-      string: targetString,
+    const updatedVoicing = addDraftFretNote<VoicingItem>({
+      voicing: currentVoicing,
+      tuning: STRINGS,
+      stringIndex: targetString,
       fret: targetFret,
-      note: targetNote,
-      role: "1"
+      role: "1",
+      noteForFret: getFretNote
     })
+    if(!updatedVoicing) {
+      setDraggedMutedString(null)
+      return
+    }
 
-    updatedVoicing.sort((a, b) => a.string - b.string)
     if (isDraftFretboardActive()) {
       updateDraftVoicing(updatedVoicing)
     } else if (canApplyVoicing(updatedVoicing)) {
@@ -1558,7 +1582,7 @@ export default function Home() {
   }
 
   const current = selectedIndex !== null ? progression[selectedIndex] ?? null : null
-  const v = voicings[voicingIndex] ?? getPinnedCustomVoicing(current)
+  const v = current ? getCurrentVoicing(current) : undefined
   const draftNamedChord = namedChordFromVoicing(draftVoicing)
   const fretboardVoicing = current
     ? v
@@ -2408,6 +2432,8 @@ export default function Home() {
 
                             if (draggedNote) {
                               handleDropOnString(stringIndex)
+                            } else if (draggedMutedString !== null) {
+                              handleDropMutedOnFret(stringIndex, 0)
                             }
                           }}
                         >
